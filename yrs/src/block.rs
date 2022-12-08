@@ -99,7 +99,7 @@ impl ID {
 /// which allows to faster locate block it points to within a block store.
 #[repr(transparent)]
 #[derive(Clone, Copy, Hash)]
-pub(crate) struct BlockPtr(NonNull<Block>);
+pub struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
     pub(crate) fn delete_as_cleanup(&self, txn: &mut TransactionMut, is_local: bool) {
@@ -711,7 +711,7 @@ impl From<BlockPtr> for BlockSlice {
 
 /// An enum containing all supported block variants.
 #[derive(PartialEq)]
-pub(crate) enum Block {
+pub enum Block {
     /// An active block containing user data.
     Item(Item),
 
@@ -992,7 +992,7 @@ impl Into<u8> for ItemFlags {
 /// required for a potential conflict resolution as well as extra fields used for joining blocks
 /// together as a part of indexed sequences or maps.
 #[derive(PartialEq)]
-pub(crate) struct Item {
+pub struct Item {
     /// Unique identifier of current item.
     pub id: ID,
 
