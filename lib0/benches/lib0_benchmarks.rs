@@ -81,6 +81,7 @@ fn bench_encoding(c: &mut Criterion) {
 
 #[cfg(feature = "serde")]
 fn bench_serialization(c: &mut Criterion) {
+    use criterion::black_box;
     use lib0::any::Any;
     use std::collections::HashMap;
 
