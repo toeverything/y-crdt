@@ -171,17 +171,13 @@ impl BlockPtr {
                 let store = txn.store_mut();
                 let encoding = store.options.offset_kind;
                 if offset > 0 {
-                    // offset could be > 0 only in context of Update::integrate,
-                    // is such case offset kind in use always means Yjs-compatible offset (utf-16)
+                    // offset is used only for locally integrated items
                     this.id.clock += offset;
                     this.left = store
                         .blocks
                         .get_item_clean_end(&ID::new(this.id.client, this.id.clock - 1));
                     this.origin = this.left.as_deref().map(|b: &Block| b.last_id());
-                    this.content = this
-                        .content
-                        .splice(offset as usize, OffsetKind::Utf16)
-                        .unwrap();
+                    this.content = this.content.splice(offset as usize, encoding).unwrap();
                     this.len -= offset;
                 }
 
@@ -922,7 +918,8 @@ impl Into<u8> for ItemFlags {
 /// required for a potential conflict resolution as well as extra fields used for joining blocks
 /// together as a part of indexed sequences or maps.
 #[derive(PartialEq)]
-pub(crate) struct Item {
+/// Pub'd for OctoBase history/raw.rs
+pub struct Item {
     /// Unique identifier of current item.
     pub id: ID,
 
@@ -930,11 +927,11 @@ pub(crate) struct Item {
 
     /// Pointer to left neighbor of this item. Used in sequenced collections.
     /// If `None` current item is a first one on it's `parent` collection.
-    pub left: Option<BlockPtr>,
+    pub(crate) left: Option<BlockPtr>,
 
     /// Pointer to right neighbor of this item. Used in sequenced collections.
     /// If `None` current item is the last one on it's `parent` collection.
-    pub right: Option<BlockPtr>,
+    pub(crate) right: Option<BlockPtr>,
 
     /// Used for concurrent insert conflict resolution. An ID of a left-side neighbor at the moment
     /// of insertion of current block.
@@ -955,7 +952,7 @@ pub(crate) struct Item {
     pub parent_sub: Option<Rc<str>>, //TODO: Rc since it's already used in Branch.map component
 
     /// This property is reused by the moved prop. In this case this property refers to an Item.
-    pub moved: Option<BlockPtr>,
+    pub(crate) moved: Option<BlockPtr>,
 
     /// Bit flag field which contains information about specifics of this item.
     pub info: ItemFlags,
@@ -1051,6 +1048,22 @@ impl Item {
             branch.item = Some(item_ptr);
         }
         item
+    }
+
+    /// Added for OctoBase history/raw.rs
+    pub fn resolve_parent(&self) -> Option<(TypePtr, Option<Rc<str>>)> {
+        if let Some(Block::Item(item)) = self.left.as_deref() {
+            if let TypePtr::Unknown = item.parent {
+                if let Some(Block::Item(item)) = item.right.as_deref() {
+                    return Some((item.parent.clone(), item.parent_sub.clone()));
+                }
+            } else {
+                return Some((item.parent.clone(), item.parent_sub.clone()));
+            }
+        } else if let Some(Block::Item(item)) = self.right.as_deref() {
+            return Some((item.parent.clone(), item.parent_sub.clone()));
+        }
+        None
     }
 
     pub fn contains(&self, id: &ID) -> bool {

@@ -12,8 +12,9 @@ readme = "./README.md"
 
 [dependencies]
 rand = { version = "0.7.0", features = ["wasm-bindgen"] }
-lib0 = { path = "../lib0", version = "0.12.0" }
-smallstr = { version = "0.2", features = ["union"]}
+# OctoBase points at all the same version of lib0
+lib0 = "0.12.2"
+smallstr = { version = "0.2", features = ["union"] }
 
 [dev-dependencies]
 criterion = "0.3"

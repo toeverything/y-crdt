@@ -300,6 +300,11 @@ impl std::fmt::Display for Store {
 #[derive(Debug, Clone)]
 pub(crate) struct StoreRef(Rc<UnsafeCell<Store>>);
 
+/// Impl'd for OctoBase
+unsafe impl Send for StoreRef {}
+/// Impl'd for OctoBase
+unsafe impl Sync for StoreRef {}
+
 impl Deref for StoreRef {
     type Target = Store;
 

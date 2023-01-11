@@ -89,6 +89,9 @@ pub struct Update {
     pub(crate) delete_set: DeleteSet,
 }
 
+/// Impl'd for OctoBase
+unsafe impl Send for Update {}
+
 impl Update {
     pub fn new() -> Self {
         Self::default()
@@ -96,6 +99,20 @@ impl Update {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.blocks.is_empty() && self.delete_set.is_empty()
+    }
+
+    /// Added for OctoBase history/raw.rs
+    pub fn as_items<'a>(&'a self) -> Vec<&'a Item> {
+        self.blocks
+            .blocks()
+            .filter_map(|b| {
+                if let BlockCarrier::Block(b) = b {
+                    b.as_item()
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Returns a state vector representing an upper bound of client clocks included by blocks
