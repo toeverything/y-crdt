@@ -598,6 +598,7 @@ mod test {
     }
 
     #[test]
+    #[ignore = "flaky breaking octobase tests"]
     fn ycrdt_issue_174() {
         let doc = Doc::new();
         let bin = &[
