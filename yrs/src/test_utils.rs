@@ -1,7 +1,8 @@
 use crate::block::ClientID;
+use crate::transaction::ReadTxn;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-use crate::{Doc, StateVector, Update};
+use crate::{Doc, StateVector, Transact, Update};
 use lib0::decoding::{Cursor, Read};
 use rand::distributions::Alphanumeric;
 use rand::prelude::{SliceRandom, StdRng};
@@ -15,9 +16,9 @@ pub fn exchange_updates(docs: &[&Doc]) {
         for j in 0..docs.len() {
             if i != j {
                 let a = docs[i];
-                let ta = a.transact();
+                let ta = a.transact_mut();
                 let b = docs[j];
-                let mut tb = b.transact();
+                let mut tb = b.transact_mut();
 
                 let sv = tb.state_vector().encode_v1();
                 let update = ta.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
@@ -97,9 +98,8 @@ impl TestConnector {
         let mut tc = Self::with_rng(rng);
         for client_id in 0..peer_num {
             let peer = tc.create_peer(client_id as ClientID);
-            let mut txn = peer.doc.transact();
-            txn.get_text("text");
-            txn.get_map("map");
+            peer.doc.get_or_insert_text("text");
+            peer.doc.get_or_insert_map("map");
         }
         tc.sync_all();
         tc
@@ -119,11 +119,14 @@ impl TestConnector {
         } else {
             let rc = self.0.clone();
             let inner = unsafe { self.0.as_ptr().as_mut().unwrap() };
-            let mut instance = TestPeer::new(client_id);
-            instance.doc.observe_update_v1(move |_, e| {
-                let mut inner = rc.borrow_mut();
-                Self::broadcast(&mut inner, client_id, &e.update);
-            });
+            let instance = TestPeer::new(client_id);
+            let _sub = instance
+                .doc
+                .observe_update_v1(move |_, e| {
+                    let mut inner = rc.borrow_mut();
+                    Self::broadcast(&mut inner, client_id, &e.update);
+                })
+                .unwrap();
             let idx = inner.peers.len();
             inner.peers.push(instance);
             inner.all.insert(client_id, idx);
@@ -368,7 +371,7 @@ impl TestConnector {
             other => panic!(
                 "Unknown message type: {} to {}",
                 other,
-                peer.doc().client_id
+                peer.doc().client_id()
             ),
         }
         msg_type
@@ -379,7 +382,7 @@ impl TestConnector {
     }
 
     fn read_sync_step2<D: Decoder>(peer: &TestPeer, decoder: &mut D) {
-        let mut txn = peer.doc.transact();
+        let mut txn = peer.doc.transact_mut();
 
         let update = Update::decode_v1(decoder.read_buf().unwrap()).unwrap();
         txn.apply_update(update);
@@ -391,14 +394,14 @@ impl TestConnector {
 
     /// Create a sync step 1 message based on the state of the current shared document.
     fn write_step1<E: Encoder>(peer: &TestPeer, encoder: &mut E) {
-        let txn = peer.doc.transact();
+        let txn = peer.doc.transact_mut();
 
         encoder.write_var(MSG_SYNC_STEP_1);
         encoder.write_buf(txn.state_vector().encode_v1());
     }
 
     fn write_step2<E: Encoder>(peer: &TestPeer, sv: &[u8], encoder: &mut E) {
-        let txn = peer.doc.transact();
+        let txn = peer.doc.transact_mut();
         let remote_sv = StateVector::decode_v1(sv).unwrap();
 
         encoder.write_var(MSG_SYNC_STEP_2);
@@ -421,8 +424,8 @@ impl TestConnector {
         */
         let inner = self.0.borrow();
         for i in 0..(inner.peers.len() - 1) {
-            let a = inner.peers[i].doc.transact();
-            let b = inner.peers[i + 1].doc.transact();
+            let a = inner.peers[i].doc.transact_mut();
+            let b = inner.peers[i + 1].doc.transact_mut();
 
             let astore = a.store();
             let bstore = b.store();
@@ -465,7 +468,7 @@ impl TestPeer {
     }
 
     pub fn client_id(&self) -> ClientID {
-        self.doc.client_id
+        self.doc.client_id()
     }
 
     pub fn doc(&self) -> &Doc {
