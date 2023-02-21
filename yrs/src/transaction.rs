@@ -256,7 +256,7 @@ pub struct TransactionMut<'doc> {
     pub(crate) changed_parent_types: Vec<BranchPtr>,
     pub(crate) subdocs: Option<Box<Subdocs>>,
     pub(crate) origin: Option<Origin>,
-    committed: bool,
+    pub committed: bool,
 }
 
 impl<'doc> ReadTxn for TransactionMut<'doc> {
