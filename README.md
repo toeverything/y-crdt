@@ -1,6 +1,9 @@
 # Y CRDT
+<p align="center">
+  <img src="logo-yrs.svg" width="200"/>
+</p>
 
-It's a collection of Rust libraries oriented around implementing [Yjs](https://yjs.dev/) algorithm and protocol with cross-language and cross-platform support in mind. It aims to maintain behavior and binary protocol compatibility with Yjs, therefore projects using Yjs/Yrs should be able to interoperate with each other.
+A collection of Rust libraries oriented around implementing [Yjs](https://yjs.dev/) algorithm and protocol with cross-language and cross-platform support in mind. It aims to maintain behavior and binary protocol compatibility with Yjs, therefore projects using Yjs/Yrs should be able to interoperate with each other.
 
 Project organization:
 
@@ -45,8 +48,8 @@ Other projects using *yrs*:
   - [x] XmlFragment
   - [x] XmlHook (*deprecated*)
   - [x] Sub documents
-  - [ ] Transaction origin
-  - [ ] Undo/redo manager
+  - [x] Transaction origin
+  - [x] Undo/redo manager
 - Encoding formats:
   - [x] lib0 v1 encoding
   - [x] lib0 v2 encoding

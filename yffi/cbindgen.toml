@@ -81,6 +81,10 @@ typedef struct YXmlAttrIter {} YXmlAttrIter;
  * traverse.
  */
 typedef struct YXmlTreeWalker {} YXmlTreeWalker;
+
+typedef struct YUndoManager {} YUndoManager;
+
+typedef struct StickyIndex {} StickyIndex;
 """
 
 trailer = """
@@ -112,3 +116,4 @@ exclude = [
 "TreeWalker" = "YXmlTreeWalker"
 "Attributes" = "YXmlAttrIter"
 "Observer" = "YObserver"
+"UndoManager" = "YUndoManager"

@@ -1,13 +1,12 @@
 use lib0::any::Any;
 use lib0::error::Error;
 use std::collections::HashMap;
-use std::ffi::{c_void, CStr, CString};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
 use std::ops::Deref;
-use std::os::raw::{c_char, c_float, c_int, c_long, c_longlong, c_uchar, c_uint, c_ulong};
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
-use yrs::block::{ClientID, ItemContent, Prelim};
+use yrs::block::{ClientID, ItemContent, Prelim, Unused};
 use yrs::types::array::ArrayEvent;
 use yrs::types::array::ArrayIter as NativeArrayIter;
 use yrs::types::map::MapEvent;
@@ -21,13 +20,15 @@ use yrs::types::{
     TYPE_REFS_DOC, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
     TYPE_REFS_XML_TEXT,
 };
+use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    uuid_v4, AfterTransactionEvent, Array, ArrayRef, DeleteSet, GetString, Map, MapRef, Observable,
-    OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter,
-    SubscriptionId, Text, TextRef, Transact, Update, Xml, XmlElementPrelim, XmlElementRef,
-    XmlFragmentRef, XmlTextPrelim, XmlTextRef,
+    uuid_v4, Array, ArrayRef, Assoc, DeleteSet, GetString, Map, MapRef, Observable, OffsetKind,
+    Options, Origin, ReadTxn, Snapshot, StateVector, StickyIndex, Store, SubdocsEvent,
+    SubdocsEventIter, SubscriptionId, Text, TextRef, Transact, TransactionCleanupEvent,
+    UndoManager, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim,
+    XmlTextRef,
 };
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
@@ -81,22 +82,22 @@ pub const Y_XML_FRAG: i8 = 6;
 pub const Y_DOC: i8 = 7;
 
 /// Flag used to mark a truthy boolean numbers.
-pub const Y_TRUE: c_char = 1;
+pub const Y_TRUE: u8 = 1;
 
 /// Flag used to mark a falsy boolean numbers.
-pub const Y_FALSE: c_char = 0;
+pub const Y_FALSE: u8 = 0;
 
 /// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
 /// the byte number of UTF8-encoded string.
-pub const Y_OFFSET_BYTES: c_int = 0;
+pub const Y_OFFSET_BYTES: u8 = 0;
 
 /// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
 /// UTF-16 chars of encoded string.
-pub const Y_OFFSET_UTF16: c_int = 1;
+pub const Y_OFFSET_UTF16: u8 = 1;
 
 /// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
 /// by UTF-32 chars of encoded string.
-pub const Y_OFFSET_UTF32: c_int = 2;
+pub const Y_OFFSET_UTF32: u8 = 2;
 
 /* pub types below are used by cbindgen for c header generation */
 
@@ -244,7 +245,7 @@ pub struct YOptions {
     /// unrecoverable document state corruption. The same thing may happen if the client restored
     /// document state from snapshot, that didn't contain all of that clients updates that were sent
     /// to other peers.
-    pub id: c_ulong,
+    pub id: u64,
 
     /// A NULL-able globally unique Uuid v4 compatible null-terminated string identifier
     /// of this document. If passed as NULL, a random Uuid will be generated instead.
@@ -260,18 +261,18 @@ pub struct YOptions {
     /// - `Y_ENCODING_BYTES`
     /// - `Y_ENCODING_UTF16`
     /// - `Y_ENCODING_UTF32`
-    pub encoding: c_int,
+    pub encoding: u8,
 
     /// Boolean flag used to determine if deleted blocks should be garbage collected or not
     /// during the transaction commits. Setting this value to 0 means GC will be performed.
-    pub skip_gc: c_int,
+    pub skip_gc: u8,
 
     /// Boolean flag used to determine if subdocument should be loaded automatically.
     /// If this is a subdocument, remote peers will load the document as well automatically.
-    pub auto_load: c_int,
+    pub auto_load: u8,
 
     /// Boolean flag used to determine whether the document should be synced by the provider now.
-    pub should_load: c_int,
+    pub should_load: u8,
 }
 
 impl Into<Options> for YOptions {
@@ -311,7 +312,7 @@ impl Into<Options> for YOptions {
 impl From<Options> for YOptions {
     fn from(o: Options) -> Self {
         YOptions {
-            id: o.client_id as c_ulong,
+            id: o.client_id,
             guid: CString::new(o.guid.as_ref()).unwrap().into_raw(),
             collection_id: if let Some(collection_id) = o.collection_id {
                 CString::new(collection_id).unwrap().into_raw()
@@ -374,7 +375,7 @@ pub unsafe extern "C" fn ystring_destroy(str: *mut c_char) {
 /// therefore a size of memory to be released must be explicitly provided.
 /// Yrs binaries don't use libc malloc, so calling `free()` on them will fault.
 #[no_mangle]
-pub unsafe extern "C" fn ybinary_destroy(ptr: *mut c_uchar, len: c_int) {
+pub unsafe extern "C" fn ybinary_destroy(ptr: *mut c_char, len: u32) {
     if !ptr.is_null() {
         drop(Vec::from_raw_parts(ptr, len as usize, len as usize));
     }
@@ -409,9 +410,9 @@ pub extern "C" fn ydoc_new_with_options(options: YOptions) -> *mut Doc {
 
 /// Returns a unique client identifier of this [Doc] instance.
 #[no_mangle]
-pub unsafe extern "C" fn ydoc_id(doc: *mut Doc) -> c_ulong {
+pub unsafe extern "C" fn ydoc_id(doc: *mut Doc) -> u64 {
     let doc = doc.as_ref().unwrap();
-    doc.client_id() as c_ulong
+    doc.client_id()
 }
 
 /// Returns a unique document identifier of this [Doc] instance.
@@ -454,46 +455,46 @@ pub unsafe extern "C" fn ydoc_auto_load(doc: *mut Doc) -> u8 {
 pub unsafe extern "C" fn ydoc_observe_updates_v1(
     doc: *mut Doc,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, c_int, *const c_uchar),
-) -> c_uint {
+    cb: extern "C" fn(*mut c_void, u32, *const c_char),
+) -> u32 {
     let doc = doc.as_ref().unwrap();
     let observer = doc
         .observe_update_v1(move |_, e| {
             let bytes = &e.update;
-            let len = bytes.len();
-            cb(state, len as c_int, bytes.as_ptr() as *const c_uchar)
+            let len = bytes.len() as u32;
+            cb(state, len, bytes.as_ptr() as *const c_char)
         })
         .unwrap();
     let subscription_id: u32 = observer.into();
-    subscription_id as c_uint
+    subscription_id
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_observe_updates_v2(
     doc: *mut Doc,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, c_int, *const c_uchar),
-) -> c_uint {
+    cb: extern "C" fn(*mut c_void, u32, *const c_char),
+) -> u32 {
     let doc = doc.as_ref().unwrap();
     let observer = doc
         .observe_update_v2(move |_, e| {
             let bytes = &e.update;
-            let len = bytes.len();
-            cb(state, len as c_int, bytes.as_ptr() as *const c_uchar)
+            let len = bytes.len() as u32;
+            cb(state, len, bytes.as_ptr() as *const c_char)
         })
         .unwrap();
     let subscription_id: u32 = observer.into();
-    subscription_id as c_uint
+    subscription_id
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ydoc_unobserve_updates_v1(doc: *mut Doc, subscription_id: c_uint) {
+pub unsafe extern "C" fn ydoc_unobserve_updates_v1(doc: *mut Doc, subscription_id: u32) {
     let doc = doc.as_ref().unwrap();
     doc.unobserve_update_v1(subscription_id as SubscriptionId);
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ydoc_unobserve_updates_v2(doc: *mut Doc, subscription_id: c_uint) {
+pub unsafe extern "C" fn ydoc_unobserve_updates_v2(doc: *mut Doc, subscription_id: u32) {
     let doc = doc.as_ref().unwrap();
     doc.unobserve_update_v2(subscription_id as SubscriptionId);
 }
@@ -503,7 +504,7 @@ pub unsafe extern "C" fn ydoc_observe_after_transaction(
     doc: *mut Doc,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *mut YAfterTransactionEvent),
-) -> c_uint {
+) -> u32 {
     let doc = doc.as_ref().unwrap();
     let observer = doc
         .observe_transaction_cleanup(move |_, e| {
@@ -512,11 +513,11 @@ pub unsafe extern "C" fn ydoc_observe_after_transaction(
         })
         .unwrap();
     let subscription_id: u32 = observer.into();
-    subscription_id as c_uint
+    subscription_id
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ydoc_unobserve_after_transaction(doc: *mut Doc, subscription_id: c_uint) {
+pub unsafe extern "C" fn ydoc_unobserve_after_transaction(doc: *mut Doc, subscription_id: u32) {
     let doc = doc.as_ref().unwrap();
     doc.unobserve_transaction_cleanup(subscription_id as SubscriptionId);
 }
@@ -526,7 +527,7 @@ pub unsafe extern "C" fn ydoc_observe_subdocs(
     doc: *mut Doc,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *mut YSubdocsEvent),
-) -> c_uint {
+) -> u32 {
     let doc = doc.as_mut().unwrap();
     let observer = doc
         .observe_subdocs(move |_, e| {
@@ -535,11 +536,11 @@ pub unsafe extern "C" fn ydoc_observe_subdocs(
         })
         .unwrap();
     let subscription_id: u32 = observer.into();
-    subscription_id as c_uint
+    subscription_id
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ydoc_unobserve_subdocs(doc: *mut Doc, subscription_id: c_uint) {
+pub unsafe extern "C" fn ydoc_unobserve_subdocs(doc: *mut Doc, subscription_id: u32) {
     let doc = doc.as_ref().unwrap();
     doc.unobserve_subdocs(subscription_id as SubscriptionId);
 }
@@ -549,17 +550,17 @@ pub unsafe extern "C" fn ydoc_observe_clear(
     doc: *mut Doc,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *mut Doc),
-) -> c_uint {
+) -> u32 {
     let doc = doc.as_mut().unwrap();
     let observer = doc
         .observe_destroy(move |_, e| cb(state, e as *const Doc as *mut _))
         .unwrap();
     let subscription_id: u32 = observer.into();
-    subscription_id as c_uint
+    subscription_id
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ydoc_unobserve_clear(doc: *mut Doc, subscription_id: c_uint) {
+pub unsafe extern "C" fn ydoc_unobserve_clear(doc: *mut Doc, subscription_id: u32) {
     let doc = doc.as_ref().unwrap();
     doc.unobserve_destroy(subscription_id as SubscriptionId);
 }
@@ -611,17 +612,35 @@ pub unsafe extern "C" fn ydoc_read_transaction(doc: *mut Doc) -> *mut Transactio
 /// of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
 /// complete, a transaction can be finished using `ytransaction_commit` function.
 ///
+/// `origin_len` and `origin` are optional parameters to specify a byte sequence used to mark
+/// the origin of this transaction (eg. you may decide to give different origins for transaction
+/// applying remote updates). These can be used by event handlers or `UndoManager` to perform
+/// specific actions. If origin should not be set, call `ydoc_write_transaction(doc, 0, NULL)`.
+///
 /// Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
 /// already opened.
 #[no_mangle]
-pub unsafe extern "C" fn ydoc_write_transaction(doc: *mut Doc) -> *mut Transaction {
+pub unsafe extern "C" fn ydoc_write_transaction(
+    doc: *mut Doc,
+    origin_len: u32,
+    origin: *const c_char,
+) -> *mut Transaction {
     assert!(!doc.is_null());
 
     let doc = doc.as_mut().unwrap();
-    if let Ok(txn) = doc.try_transact_mut() {
-        Box::into_raw(Box::new(Transaction::read_write(txn)))
+    if origin_len == 0 {
+        if let Ok(txn) = doc.try_transact_mut() {
+            Box::into_raw(Box::new(Transaction::read_write(txn)))
+        } else {
+            null_mut()
+        }
     } else {
-        null_mut()
+        let origin = std::slice::from_raw_parts(origin as *const u8, origin_len as usize);
+        if let Ok(txn) = doc.try_transact_mut_with(origin) {
+            Box::into_raw(Box::new(Transaction::read_write(txn)))
+        } else {
+            null_mut()
+        }
     }
 }
 
@@ -665,7 +684,7 @@ pub unsafe extern "C" fn ybranch_read_transaction(branch: *mut Branch) -> *mut T
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_subdocs(
     txn: *mut Transaction,
-    len: *mut c_int,
+    len: *mut u32,
 ) -> *mut *mut Doc {
     let txn = txn.as_ref().unwrap();
     let subdocs: Vec<_> = txn
@@ -673,7 +692,7 @@ pub unsafe extern "C" fn ytransaction_subdocs(
         .map(|doc| doc as *const Doc as *mut Doc)
         .collect();
     let out = subdocs.into_boxed_slice();
-    *len = out.len() as c_int;
+    *len = out.len() as u32;
     Box::into_raw(out) as *mut _
 }
 
@@ -825,16 +844,16 @@ pub unsafe extern "C" fn yxmltext(doc: *mut Doc, name: *const c_char) -> *mut Br
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_state_vector_v1(
     txn: *const Transaction,
-    len: *mut c_int,
-) -> *mut c_uchar {
+    len: *mut u32,
+) -> *mut c_char {
     assert!(!txn.is_null());
 
     let txn = txn.as_ref().unwrap();
     let state_vector = txn.state_vector();
     let binary = state_vector.encode_v1().into_boxed_slice();
 
-    *len = binary.len() as c_int;
-    Box::into_raw(binary) as *mut c_uchar
+    *len = binary.len() as u32;
+    Box::into_raw(binary) as *mut c_char
 }
 
 /// Returns a delta difference between current state of a transaction's document and a state vector
@@ -854,10 +873,10 @@ pub unsafe extern "C" fn ytransaction_state_vector_v1(
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_state_diff_v1(
     txn: *const Transaction,
-    sv: *const c_uchar,
-    sv_len: c_int,
-    len: *mut c_int,
-) -> *mut c_uchar {
+    sv: *const c_char,
+    sv_len: u32,
+    len: *mut u32,
+) -> *mut c_char {
     assert!(!txn.is_null());
 
     let txn = txn.as_ref().unwrap();
@@ -877,8 +896,8 @@ pub unsafe extern "C" fn ytransaction_state_diff_v1(
     let mut encoder = EncoderV1::new();
     txn.encode_diff(&sv, &mut encoder);
     let binary = encoder.to_vec().into_boxed_slice();
-    *len = binary.len() as c_int;
-    Box::into_raw(binary) as *mut c_uchar
+    *len = binary.len() as u32;
+    Box::into_raw(binary) as *mut c_char
 }
 
 /// Returns a delta difference between current state of a transaction's document and a state vector
@@ -898,10 +917,10 @@ pub unsafe extern "C" fn ytransaction_state_diff_v1(
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_state_diff_v2(
     txn: *const Transaction,
-    sv: *const c_uchar,
-    sv_len: c_int,
-    len: *mut c_int,
-) -> *mut c_uchar {
+    sv: *const c_char,
+    sv_len: u32,
+    len: *mut u32,
+) -> *mut c_char {
     assert!(!txn.is_null());
 
     let txn = txn.as_ref().unwrap();
@@ -921,8 +940,8 @@ pub unsafe extern "C" fn ytransaction_state_diff_v2(
     let mut encoder = EncoderV2::new();
     txn.encode_diff(&sv, &mut encoder);
     let binary = encoder.to_vec().into_boxed_slice();
-    *len = binary.len() as c_int;
-    Box::into_raw(binary) as *mut c_uchar
+    *len = binary.len() as u32;
+    Box::into_raw(binary) as *mut c_char
 }
 
 /// Returns a snapshot descriptor of a current state of the document. This snapshot information
@@ -931,14 +950,14 @@ pub unsafe extern "C" fn ytransaction_state_diff_v2(
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_snapshot(
     txn: *const Transaction,
-    len: *mut c_int,
-) -> *mut c_uchar {
+    len: *mut u32,
+) -> *mut c_char {
     assert!(!txn.is_null());
     let txn = txn.as_ref().unwrap();
     let binary = txn.snapshot().encode_v1().into_boxed_slice();
 
-    *len = binary.len() as c_int;
-    Box::into_raw(binary) as *mut c_uchar
+    *len = binary.len() as u32;
+    Box::into_raw(binary) as *mut c_char
 }
 
 /// Encodes a state of the document at a point in time specified by the provided `snapshot`
@@ -952,10 +971,10 @@ pub unsafe extern "C" fn ytransaction_snapshot(
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v1(
     txn: *const Transaction,
-    snapshot: *const c_uchar,
-    snapshot_len: c_int,
-    len: *mut c_int,
-) -> *mut c_uchar {
+    snapshot: *const c_char,
+    snapshot_len: u32,
+    len: *mut u32,
+) -> *mut c_char {
     assert!(!txn.is_null());
     let txn = txn.as_ref().unwrap();
     let snapshot = {
@@ -968,8 +987,8 @@ pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v1(
         Err(_) => null_mut(),
         Ok(_) => {
             let binary = encoder.to_vec().into_boxed_slice();
-            *len = binary.len() as c_int;
-            Box::into_raw(binary) as *mut c_uchar
+            *len = binary.len() as u32;
+            Box::into_raw(binary) as *mut c_char
         }
     }
 }
@@ -985,10 +1004,10 @@ pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v1(
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v2(
     txn: *const Transaction,
-    snapshot: *const c_uchar,
-    snapshot_len: c_int,
-    len: *mut c_int,
-) -> *mut c_uchar {
+    snapshot: *const c_char,
+    snapshot_len: u32,
+    len: *mut u32,
+) -> *mut c_char {
     assert!(!txn.is_null());
     let txn = txn.as_ref().unwrap();
     let snapshot = {
@@ -1001,8 +1020,8 @@ pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v2(
         Err(_) => null_mut(),
         Ok(_) => {
             let binary = encoder.to_vec().into_boxed_slice();
-            *len = binary.len() as c_int;
-            Box::into_raw(binary) as *mut c_uchar
+            *len = binary.len() as u32;
+            Box::into_raw(binary) as *mut c_char
         }
     }
 }
@@ -1011,10 +1030,7 @@ pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v2(
 /// encoded using lib0 v1 encoding.
 /// Returns null if update couldn't be parsed into a lib0 v1 formatting.
 #[no_mangle]
-pub unsafe extern "C" fn yupdate_debug_v1(
-    update: *const c_uchar,
-    update_len: c_int,
-) -> *mut c_char {
+pub unsafe extern "C" fn yupdate_debug_v1(update: *const c_char, update_len: u32) -> *mut c_char {
     assert!(!update.is_null());
 
     let data = std::slice::from_raw_parts(update as *const u8, update_len as usize);
@@ -1030,10 +1046,7 @@ pub unsafe extern "C" fn yupdate_debug_v1(
 /// encoded using lib0 v2 encoding.
 /// Returns null if update couldn't be parsed into a lib0 v2 formatting.
 #[no_mangle]
-pub unsafe extern "C" fn yupdate_debug_v2(
-    update: *const c_uchar,
-    update_len: c_int,
-) -> *mut c_char {
+pub unsafe extern "C" fn yupdate_debug_v2(update: *const c_char, update_len: u32) -> *mut c_char {
     assert!(!update.is_null());
 
     let data = std::slice::from_raw_parts(update as *const u8, update_len as usize);
@@ -1061,9 +1074,9 @@ pub unsafe extern "C" fn yupdate_debug_v2(
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_apply(
     txn: *mut Transaction,
-    diff: *const c_uchar,
-    diff_len: c_int,
-) -> c_int {
+    diff: *const c_char,
+    diff_len: u32,
+) -> u8 {
     assert!(!txn.is_null());
     assert!(!diff.is_null());
 
@@ -1098,9 +1111,9 @@ pub unsafe extern "C" fn ytransaction_apply(
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_apply_v2(
     txn: *mut Transaction,
-    diff: *const c_uchar,
-    diff_len: c_int,
-) -> c_int {
+    diff: *const c_char,
+    diff_len: u32,
+) -> u8 {
     assert!(!txn.is_null());
     assert!(!diff.is_null());
 
@@ -1119,24 +1132,24 @@ pub unsafe extern "C" fn ytransaction_apply_v2(
 }
 
 /// Error code: couldn't read data from input stream.
-pub const ERR_CODE_IO: c_int = 1;
+pub const ERR_CODE_IO: u8 = 1;
 
 /// Error code: decoded variable integer outside of the expected integer size bounds.
-pub const ERR_CODE_VAR_INT: c_int = 2;
+pub const ERR_CODE_VAR_INT: u8 = 2;
 
 /// Error code: end of stream found when more data was expected.
-pub const ERR_CODE_EOS: c_int = 3;
+pub const ERR_CODE_EOS: u8 = 3;
 
 /// Error code: decoded enum tag value was not among known cases.
-pub const ERR_CODE_UNEXPECTED_VALUE: c_int = 4;
+pub const ERR_CODE_UNEXPECTED_VALUE: u8 = 4;
 
 /// Error code: failure when trying to decode JSON content.
-pub const ERR_CODE_INVALID_JSON: c_int = 5;
+pub const ERR_CODE_INVALID_JSON: u8 = 5;
 
 /// Error code: other error type than the one specified.
-pub const ERR_CODE_OTHER: c_int = 6;
+pub const ERR_CODE_OTHER: u8 = 6;
 
-fn err_code(e: Error) -> c_int {
+fn err_code(e: Error) -> u8 {
     match e {
         Error::IO(_) => ERR_CODE_IO,
         Error::VarIntSizeExceeded(_) => ERR_CODE_VAR_INT,
@@ -1149,11 +1162,11 @@ fn err_code(e: Error) -> c_int {
 
 /// Returns the length of the `YText` string content in bytes (without the null terminator character)
 #[no_mangle]
-pub unsafe extern "C" fn ytext_len(txt: *const Branch, txn: *const Transaction) -> c_int {
+pub unsafe extern "C" fn ytext_len(txt: *const Branch, txn: *const Transaction) -> u32 {
     assert!(!txt.is_null());
     let txn = txn.as_ref().unwrap();
     let txt = TextRef::from_raw_branch(txt);
-    txt.len(txn) as c_int
+    txt.len(txn)
 }
 
 /// Returns a null-terminated UTF-8 encoded string content of a current `YText` shared data type.
@@ -1183,7 +1196,7 @@ pub unsafe extern "C" fn ytext_string(txt: *const Branch, txn: *const Transactio
 pub unsafe extern "C" fn ytext_insert(
     txt: *const Branch,
     txn: *mut Transaction,
-    index: c_int,
+    index: u32,
     value: *const c_char,
     attrs: *const YInput,
 ) {
@@ -1215,8 +1228,8 @@ pub unsafe extern "C" fn ytext_insert(
 pub unsafe extern "C" fn ytext_format(
     txt: *const Branch,
     txn: *mut Transaction,
-    index: c_int,
-    len: c_int,
+    index: u32,
+    len: u32,
     attrs: *const YInput,
 ) {
     assert!(!txt.is_null());
@@ -1251,7 +1264,7 @@ pub unsafe extern "C" fn ytext_format(
 pub unsafe extern "C" fn ytext_insert_embed(
     txt: *const Branch,
     txn: *mut Transaction,
-    index: c_int,
+    index: u32,
     content: *const YInput,
     attrs: *const YInput,
 ) {
@@ -1267,10 +1280,10 @@ pub unsafe extern "C" fn ytext_insert_embed(
     let index = index as u32;
     let content: Any = content.read().into();
     if attrs.is_null() {
-        txt.insert_embed(txn, index, content)
+        txt.insert_embed(txn, index, content);
     } else {
         if let Some(attrs) = map_attrs(attrs.read().into()) {
-            txt.insert_embed_with_attributes(txn, index, content, attrs)
+            txt.insert_embed_with_attributes(txn, index, content, attrs);
         } else {
             panic!("ytext_insert_embed: passed attributes are not of map type")
         }
@@ -1298,8 +1311,8 @@ fn map_attrs(attrs: Any) -> Option<Attrs> {
 pub unsafe extern "C" fn ytext_remove_range(
     txt: *const Branch,
     txn: *mut Transaction,
-    index: c_int,
-    length: c_int,
+    index: u32,
+    length: u32,
 ) {
     assert!(!txt.is_null());
     assert!(!txn.is_null());
@@ -1314,11 +1327,11 @@ pub unsafe extern "C" fn ytext_remove_range(
 
 /// Returns a number of elements stored within current instance of `YArray`.
 #[no_mangle]
-pub unsafe extern "C" fn yarray_len(array: *const Branch) -> c_int {
+pub unsafe extern "C" fn yarray_len(array: *const Branch) -> u32 {
     assert!(!array.is_null());
 
     let array = array.as_ref().unwrap();
-    array.len() as c_int
+    array.len() as u32
 }
 
 /// Returns a pointer to a `YOutput` value stored at a given `index` of a current `YArray`.
@@ -1329,7 +1342,7 @@ pub unsafe extern "C" fn yarray_len(array: *const Branch) -> c_int {
 pub unsafe extern "C" fn yarray_get(
     array: *const Branch,
     txn: *const Transaction,
-    index: c_int,
+    index: u32,
 ) -> *mut YOutput {
     assert!(!array.is_null());
 
@@ -1357,9 +1370,9 @@ pub unsafe extern "C" fn yarray_get(
 pub unsafe extern "C" fn yarray_insert_range(
     array: *const Branch,
     txn: *mut Transaction,
-    index: c_int,
+    index: u32,
     items: *const YInput,
-    items_len: c_int,
+    items_len: u32,
 ) {
     assert!(!array.is_null());
     assert!(!txn.is_null());
@@ -1410,8 +1423,8 @@ pub unsafe extern "C" fn yarray_insert_range(
 pub unsafe extern "C" fn yarray_remove_range(
     array: *const Branch,
     txn: *mut Transaction,
-    index: c_int,
-    len: c_int,
+    index: u32,
+    len: u32,
 ) {
     assert!(!array.is_null());
     assert!(!txn.is_null());
@@ -1429,8 +1442,8 @@ pub unsafe extern "C" fn yarray_remove_range(
 pub unsafe extern "C" fn yarray_move(
     array: *const Branch,
     txn: *mut Transaction,
-    source: c_int,
-    target: c_int,
+    source: u32,
+    target: u32,
 ) {
     assert!(!array.is_null());
     assert!(!txn.is_null());
@@ -1527,13 +1540,13 @@ pub unsafe extern "C" fn ymap_iter_next(iter: *mut MapIter) -> *mut YMapEntry {
 
 /// Returns a number of entries stored within a `map`.
 #[no_mangle]
-pub unsafe extern "C" fn ymap_len(map: *const Branch, txn: *const Transaction) -> c_int {
+pub unsafe extern "C" fn ymap_len(map: *const Branch, txn: *const Transaction) -> u32 {
     assert!(!map.is_null());
 
     let txn = txn.as_ref().unwrap();
     let map = MapRef::from_raw_branch(map);
 
-    map.len(txn) as c_int
+    map.len(txn) as u32
 }
 
 /// Inserts a new entry (specified as `key`-`value` pair) into a current `map`. If entry under such
@@ -1577,7 +1590,7 @@ pub unsafe extern "C" fn ymap_remove(
     map: *const Branch,
     txn: *mut Transaction,
     key: *const c_char,
-) -> c_char {
+) -> u8 {
     assert!(!map.is_null());
     assert!(!txn.is_null());
     assert!(!key.is_null());
@@ -1892,14 +1905,14 @@ pub unsafe extern "C" fn yxmlelem_parent(xml: *const Branch) -> *mut Branch {
 /// Returns a number of child nodes (both `YXmlElement` and `YXmlText`) living under a current XML
 /// element. This function doesn't count a recursive nodes, only direct children of a current node.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_child_len(xml: *const Branch, txn: *const Transaction) -> c_int {
+pub unsafe extern "C" fn yxmlelem_child_len(xml: *const Branch, txn: *const Transaction) -> u32 {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
     let txn = txn.as_ref().unwrap();
     let xml = XmlElementRef::from_raw_branch(xml);
 
-    xml.len(txn) as c_int
+    xml.len(txn) as u32
 }
 
 /// Returns a first child node of a current `YXmlElement`, or null pointer if current XML node is
@@ -1982,7 +1995,7 @@ pub unsafe extern "C" fn yxmlelem_tree_walker_next(iterator: *mut TreeWalker) ->
 pub unsafe extern "C" fn yxmlelem_insert_elem(
     xml: *const Branch,
     txn: *mut Transaction,
-    index: c_int,
+    index: u32,
     name: *const c_char,
 ) -> *mut Branch {
     assert!(!xml.is_null());
@@ -2009,7 +2022,7 @@ pub unsafe extern "C" fn yxmlelem_insert_elem(
 pub unsafe extern "C" fn yxmlelem_insert_text(
     xml: *const Branch,
     txn: *mut Transaction,
-    index: c_int,
+    index: u32,
 ) -> *mut Branch {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
@@ -2019,7 +2032,7 @@ pub unsafe extern "C" fn yxmlelem_insert_text(
     let txn = txn
         .as_mut()
         .expect("provided transaction was not writeable");
-    xml.insert(txn, index as u32, XmlTextPrelim(""))
+    xml.insert(txn, index as u32, XmlTextPrelim::new(""))
         .into_raw_branch()
 }
 
@@ -2030,8 +2043,8 @@ pub unsafe extern "C" fn yxmlelem_insert_text(
 pub unsafe extern "C" fn yxmlelem_remove_range(
     xml: *const Branch,
     txn: *mut Transaction,
-    index: c_int,
-    len: c_int,
+    index: u32,
+    len: u32,
 ) {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
@@ -2054,7 +2067,7 @@ pub unsafe extern "C" fn yxmlelem_remove_range(
 pub unsafe extern "C" fn yxmlelem_get(
     xml: *const Branch,
     txn: *const Transaction,
-    index: c_int,
+    index: u32,
 ) -> *const YOutput {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
@@ -2076,14 +2089,14 @@ pub unsafe extern "C" fn yxmlelem_get(
 /// Returns the length of the `YXmlText` string content in bytes (without the null terminator
 /// character)
 #[no_mangle]
-pub unsafe extern "C" fn yxmltext_len(txt: *const Branch, txn: *const Transaction) -> c_int {
+pub unsafe extern "C" fn yxmltext_len(txt: *const Branch, txn: *const Transaction) -> u32 {
     assert!(!txt.is_null());
     assert!(!txn.is_null());
 
     let txn = txn.as_ref().unwrap();
     let txt = XmlTextRef::from_raw_branch(txt);
 
-    txt.len(txn) as c_int
+    txt.len(txn) as u32
 }
 
 /// Returns a null-terminated UTF-8 encoded string content of a current `YXmlText` shared data type.
@@ -2118,7 +2131,7 @@ pub unsafe extern "C" fn yxmltext_string(
 pub unsafe extern "C" fn yxmltext_insert(
     txt: *const Branch,
     txn: *mut Transaction,
-    index: c_int,
+    index: u32,
     str: *const c_char,
     attrs: *const YInput,
 ) {
@@ -2158,7 +2171,7 @@ pub unsafe extern "C" fn yxmltext_insert(
 pub unsafe extern "C" fn yxmltext_insert_embed(
     txt: *const Branch,
     txn: *mut Transaction,
-    index: c_int,
+    index: u32,
     content: *const YInput,
     attrs: *const YInput,
 ) {
@@ -2174,10 +2187,10 @@ pub unsafe extern "C" fn yxmltext_insert_embed(
     let index = index as u32;
     let content: Any = content.read().into();
     if attrs.is_null() {
-        txt.insert_embed(txn, index, content)
+        txt.insert_embed(txn, index, content);
     } else {
         if let Some(attrs) = map_attrs(attrs.read().into()) {
-            txt.insert_embed_with_attributes(txn, index, content, attrs)
+            txt.insert_embed_with_attributes(txn, index, content, attrs);
         } else {
             panic!("yxmltext_insert_embed: passed attributes are not of map type")
         }
@@ -2190,8 +2203,8 @@ pub unsafe extern "C" fn yxmltext_insert_embed(
 pub unsafe extern "C" fn yxmltext_format(
     txt: *const Branch,
     txn: *mut Transaction,
-    index: c_int,
-    len: c_int,
+    index: u32,
+    len: u32,
     attrs: *const YInput,
 ) {
     assert!(!txt.is_null());
@@ -2224,8 +2237,8 @@ pub unsafe extern "C" fn yxmltext_format(
 pub unsafe extern "C" fn yxmltext_remove_range(
     txt: *const Branch,
     txn: *mut Transaction,
-    idx: c_int,
-    len: c_int,
+    idx: u32,
+    len: u32,
 ) {
     assert!(!txt.is_null());
     assert!(!txn.is_null());
@@ -2348,7 +2361,7 @@ pub struct YInput {
     /// elements.
     ///
     /// For other types it's always equal to `1`.
-    pub len: c_int,
+    pub len: u32,
 
     /// Union struct which contains a content corresponding to a provided `tag` field.
     value: YInputContent,
@@ -2413,11 +2426,11 @@ impl YInput {
 
 #[repr(C)]
 union YInputContent {
-    flag: c_char,
-    num: c_float,
-    integer: c_long,
+    flag: u8,
+    num: f64,
+    integer: i64,
     str: *mut c_char,
-    buf: *mut c_uchar,
+    buf: *mut c_char,
     values: *mut YInput,
     map: ManuallyDrop<YMapInputData>,
     doc: *mut Doc,
@@ -2434,6 +2447,8 @@ impl Drop for YInput {
 }
 
 impl Prelim for YInput {
+    type Return = Unused;
+
     fn into_content<'doc>(self, _: &mut yrs::TransactionMut<'doc>) -> (ItemContent, Option<Self>) {
         unsafe {
             if self.tag <= 0 {
@@ -2540,7 +2555,7 @@ pub struct YOutput {
     /// For [Y_JSON_ARR], [Y_JSON_MAP] it describes a number of passed elements.
     ///
     /// For other types it's always equal to `1`.
-    pub len: c_int,
+    pub len: u32,
 
     /// Union struct which contains a content corresponding to a provided `tag` field.
     value: YOutputContent,
@@ -2683,26 +2698,24 @@ impl From<Any> for YOutput {
                 Any::BigInt(v) => YOutput {
                     tag: Y_JSON_INT,
                     len: 1,
-                    value: YOutputContent {
-                        integer: v as c_longlong,
-                    },
+                    value: YOutputContent { integer: v },
                 },
                 Any::String(v) => YOutput {
                     tag: Y_JSON_STR,
-                    len: v.len() as c_int,
+                    len: v.len() as u32,
                     value: YOutputContent {
                         str: CString::new(v.as_ref()).unwrap().into_raw(),
                     },
                 },
                 Any::Buffer(v) => YOutput {
                     tag: Y_JSON_BUF,
-                    len: v.len() as c_int,
+                    len: v.len() as u32,
                     value: YOutputContent {
                         buf: Box::into_raw(v.clone()) as *mut _,
                     },
                 },
                 Any::Array(v) => {
-                    let len = v.len() as c_int;
+                    let len = v.len() as u32;
                     let v = Vec::from(v);
                     let mut array: Vec<_> = v.into_iter().map(|v| YOutput::from(v)).collect();
                     array.shrink_to_fit();
@@ -2715,7 +2728,7 @@ impl From<Any> for YOutput {
                     }
                 }
                 Any::Map(v) => {
-                    let len = v.len() as c_int;
+                    let len = v.len() as u32;
                     let v = *v;
                     let mut array: Vec<_> = v
                         .into_iter()
@@ -2821,11 +2834,11 @@ impl From<Doc> for YOutput {
 
 #[repr(C)]
 union YOutputContent {
-    flag: c_char,
-    num: c_float,
-    integer: c_longlong,
+    flag: u8,
+    num: f64,
+    integer: i64,
     str: *mut c_char,
-    buf: *mut c_uchar,
+    buf: *mut c_char,
     array: *mut YOutput,
     map: *mut YMapEntry,
     y_type: *mut Branch,
@@ -2865,7 +2878,7 @@ pub unsafe extern "C" fn yinput_undefined() -> YInput {
 /// Function constructor used to create JSON-like boolean `YInput` cell.
 /// This function doesn't allocate any heap resources.
 #[no_mangle]
-pub unsafe extern "C" fn yinput_bool(flag: c_char) -> YInput {
+pub unsafe extern "C" fn yinput_bool(flag: u8) -> YInput {
     YInput {
         tag: Y_JSON_BOOL,
         len: 1,
@@ -2876,7 +2889,7 @@ pub unsafe extern "C" fn yinput_bool(flag: c_char) -> YInput {
 /// Function constructor used to create JSON-like 64-bit floating point number `YInput` cell.
 /// This function doesn't allocate any heap resources.
 #[no_mangle]
-pub unsafe extern "C" fn yinput_float(num: c_float) -> YInput {
+pub unsafe extern "C" fn yinput_float(num: f64) -> YInput {
     YInput {
         tag: Y_JSON_NUM,
         len: 1,
@@ -2887,7 +2900,7 @@ pub unsafe extern "C" fn yinput_float(num: c_float) -> YInput {
 /// Function constructor used to create JSON-like 64-bit signed integer `YInput` cell.
 /// This function doesn't allocate any heap resources.
 #[no_mangle]
-pub unsafe extern "C" fn yinput_long(integer: c_long) -> YInput {
+pub unsafe extern "C" fn yinput_long(integer: i64) -> YInput {
     YInput {
         tag: Y_JSON_INT,
         len: 1,
@@ -2914,12 +2927,12 @@ pub unsafe extern "C" fn yinput_string(str: *const c_char) -> YInput {
 /// This function doesn't allocate any heap resources and doesn't release any on its own, therefore
 /// its up to a caller to free resources once a structure is no longer needed.
 #[no_mangle]
-pub unsafe extern "C" fn yinput_binary(buf: *const u8, len: c_int) -> YInput {
+pub unsafe extern "C" fn yinput_binary(buf: *const c_char, len: u32) -> YInput {
     YInput {
         tag: Y_JSON_BUF,
         len,
         value: YInputContent {
-            buf: buf as *mut u8,
+            buf: buf as *mut c_char,
         },
     }
 }
@@ -2928,7 +2941,7 @@ pub unsafe extern "C" fn yinput_binary(buf: *const u8, len: c_int) -> YInput {
 /// a given length. This function doesn't allocate any heap resources and doesn't release any on its
 /// own, therefore its up to a caller to free resources once a structure is no longer needed.
 #[no_mangle]
-pub unsafe extern "C" fn yinput_json_array(values: *mut YInput, len: c_int) -> YInput {
+pub unsafe extern "C" fn yinput_json_array(values: *mut YInput, len: u32) -> YInput {
     YInput {
         tag: Y_JSON_ARR,
         len,
@@ -2946,7 +2959,7 @@ pub unsafe extern "C" fn yinput_json_array(values: *mut YInput, len: c_int) -> Y
 pub unsafe extern "C" fn yinput_json_map(
     keys: *mut *mut c_char,
     values: *mut YInput,
-    len: c_int,
+    len: u32,
 ) -> YInput {
     YInput {
         tag: Y_JSON_MAP,
@@ -2962,7 +2975,7 @@ pub unsafe extern "C" fn yinput_json_map(
 /// any on its own, therefore its up to a caller to free resources once a structure is no longer
 /// needed.
 #[no_mangle]
-pub unsafe extern "C" fn yinput_yarray(values: *mut YInput, len: c_int) -> YInput {
+pub unsafe extern "C" fn yinput_yarray(values: *mut YInput, len: u32) -> YInput {
     YInput {
         tag: Y_ARRAY,
         len,
@@ -2980,7 +2993,7 @@ pub unsafe extern "C" fn yinput_yarray(values: *mut YInput, len: c_int) -> YInpu
 pub unsafe extern "C" fn yinput_ymap(
     keys: *mut *mut c_char,
     values: *mut YInput,
-    len: c_int,
+    len: u32,
 ) -> YInput {
     YInput {
         tag: Y_MAP,
@@ -3062,7 +3075,7 @@ pub unsafe extern "C" fn youtput_read_ydoc(val: *const YOutput) -> *mut Doc {
 /// `1` for truthy case and `0` otherwise. Returns a null pointer in case when a value stored under
 /// current `YOutput` cell is not of a boolean type.
 #[no_mangle]
-pub unsafe extern "C" fn youtput_read_bool(val: *const YOutput) -> *const c_char {
+pub unsafe extern "C" fn youtput_read_bool(val: *const YOutput) -> *const u8 {
     let v = val.as_ref().unwrap();
     if v.tag == Y_JSON_BOOL {
         &v.value.flag
@@ -3076,7 +3089,7 @@ pub unsafe extern "C" fn youtput_read_bool(val: *const YOutput) -> *const c_char
 /// Returns a null pointer in case when a value stored under current `YOutput` cell
 /// is not a floating point number.
 #[no_mangle]
-pub unsafe extern "C" fn youtput_read_float(val: *const YOutput) -> *const c_float {
+pub unsafe extern "C" fn youtput_read_float(val: *const YOutput) -> *const f64 {
     let v = val.as_ref().unwrap();
     if v.tag == Y_JSON_NUM {
         &v.value.num
@@ -3090,7 +3103,7 @@ pub unsafe extern "C" fn youtput_read_float(val: *const YOutput) -> *const c_flo
 /// Returns a null pointer in case when a value stored under current `YOutput` cell
 /// is not a signed integer.
 #[no_mangle]
-pub unsafe extern "C" fn youtput_read_long(val: *const YOutput) -> *const c_longlong {
+pub unsafe extern "C" fn youtput_read_long(val: *const YOutput) -> *const i64 {
     let v = val.as_ref().unwrap();
     if v.tag == Y_JSON_INT {
         &v.value.integer
@@ -3122,7 +3135,7 @@ pub unsafe extern "C" fn youtput_read_string(val: *const YOutput) -> *mut c_char
 /// is not a binary type. Underlying binary is released automatically as part of [youtput_destroy]
 /// destructor.
 #[no_mangle]
-pub unsafe extern "C" fn youtput_read_binary(val: *const YOutput) -> *const c_uchar {
+pub unsafe extern "C" fn youtput_read_binary(val: *const YOutput) -> *const c_char {
     let v = val.as_ref().unwrap();
     if v.tag == Y_JSON_BUF {
         v.value.buf
@@ -3247,7 +3260,7 @@ pub unsafe extern "C" fn ytext_observe(
     txt: *const Branch,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YTextEvent),
-) -> c_uint {
+) -> u32 {
     assert!(!txt.is_null());
 
     let mut txt = TextRef::from_raw_branch(txt);
@@ -3256,7 +3269,7 @@ pub unsafe extern "C" fn ytext_observe(
         cb(state, &e as *const YTextEvent);
     });
     let subscription_id: u32 = observer.into();
-    subscription_id as c_uint
+    subscription_id
 }
 
 /// Subscribes a given callback function `cb` to changes made by this `YMap` instance. Callbacks
@@ -3268,7 +3281,7 @@ pub unsafe extern "C" fn ymap_observe(
     map: *const Branch,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YMapEvent),
-) -> c_uint {
+) -> u32 {
     assert!(!map.is_null());
 
     let mut map = MapRef::from_raw_branch(map);
@@ -3277,7 +3290,7 @@ pub unsafe extern "C" fn ymap_observe(
         cb(state, &e as *const YMapEvent);
     });
     let subscription_id: u32 = observer.into();
-    subscription_id as c_uint
+    subscription_id
 }
 
 /// Subscribes a given callback function `cb` to changes made by this `YArray` instance. Callbacks
@@ -3289,7 +3302,7 @@ pub unsafe extern "C" fn yarray_observe(
     array: *const Branch,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YArrayEvent),
-) -> c_uint {
+) -> u32 {
     assert!(!array.is_null());
 
     let mut array = ArrayRef::from_raw_branch(array);
@@ -3298,7 +3311,7 @@ pub unsafe extern "C" fn yarray_observe(
         cb(state, &e as *const YArrayEvent);
     });
     let subscription_id: u32 = observer.into();
-    subscription_id as c_uint
+    subscription_id
 }
 
 /// Subscribes a given callback function `cb` to changes made by this `YXmlElement` instance.
@@ -3310,7 +3323,7 @@ pub unsafe extern "C" fn yxmlelem_observe(
     xml: *const Branch,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YXmlEvent),
-) -> c_uint {
+) -> u32 {
     assert!(!xml.is_null());
 
     let mut xml = XmlElementRef::from_raw_branch(xml);
@@ -3319,7 +3332,7 @@ pub unsafe extern "C" fn yxmlelem_observe(
         cb(state, &e as *const YXmlEvent);
     });
     let subscription_id: u32 = observer.into();
-    subscription_id as c_uint
+    subscription_id
 }
 
 /// Subscribes a given callback function `cb` to changes made by this `YXmlText` instance. Callbacks
@@ -3331,7 +3344,7 @@ pub unsafe extern "C" fn yxmltext_observe(
     xml: *const Branch,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YXmlTextEvent),
-) -> c_uint {
+) -> u32 {
     assert!(!xml.is_null());
 
     let mut xml = XmlTextRef::from_raw_branch(xml);
@@ -3340,7 +3353,7 @@ pub unsafe extern "C" fn yxmltext_observe(
         cb(state, &e as *const YXmlTextEvent);
     });
     let subscription_id: u32 = observer.into();
-    subscription_id as c_uint
+    subscription_id
 }
 
 /// Subscribes a given callback function `cb` to changes made by this shared type instance as well
@@ -3353,18 +3366,18 @@ pub unsafe extern "C" fn yxmltext_observe(
 pub unsafe extern "C" fn yobserve_deep(
     ytype: *mut Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, c_int, *const YEvent),
-) -> c_uint {
+    cb: extern "C" fn(*mut c_void, u32, *const YEvent),
+) -> u32 {
     assert!(!ytype.is_null());
 
     let branch = ytype.as_mut().unwrap();
     let observer = branch.observe_deep(move |txn, events| {
         let events: Vec<_> = events.iter().map(|e| YEvent::new(txn, e)).collect();
-        let len = events.len() as c_int;
+        let len = events.len() as u32;
         cb(state, len, events.as_ptr());
     });
     let subscription_id: u32 = observer.into();
-    subscription_id as c_uint
+    subscription_id
 }
 
 /// Event generated for callbacks subscribed using `ydoc_observe_after_transaction`. It contains
@@ -3380,7 +3393,7 @@ pub struct YAfterTransactionEvent {
 }
 
 impl YAfterTransactionEvent {
-    unsafe fn new(e: &AfterTransactionEvent) -> Self {
+    unsafe fn new(e: &TransactionCleanupEvent) -> Self {
         YAfterTransactionEvent {
             before_state: YStateVector::new(&e.before_state),
             after_state: YStateVector::new(&e.after_state),
@@ -3391,9 +3404,9 @@ impl YAfterTransactionEvent {
 
 #[repr(C)]
 pub struct YSubdocsEvent {
-    added_len: c_int,
-    removed_len: c_int,
-    loaded_len: c_int,
+    added_len: u32,
+    removed_len: u32,
+    loaded_len: u32,
     added: *mut *mut Doc,
     removed: *mut *mut Doc,
     loaded: *mut *mut Doc,
@@ -3414,9 +3427,9 @@ impl YSubdocsEvent {
         let loaded = e.loaded();
 
         YSubdocsEvent {
-            added_len: added.len() as c_int,
-            removed_len: removed.len() as c_int,
-            loaded_len: loaded.len() as c_int,
+            added_len: added.len() as u32,
+            removed_len: removed.len() as u32,
+            loaded_len: loaded.len() as u32,
             added: into_ptr(added),
             removed: into_ptr(removed),
             loaded: into_ptr(loaded),
@@ -3426,7 +3439,7 @@ impl YSubdocsEvent {
 
 impl Drop for YSubdocsEvent {
     fn drop(&mut self) {
-        fn release(len: c_int, buf: *mut *mut Doc) {
+        fn release(len: u32, buf: *mut *mut Doc) {
             unsafe {
                 let docs = Vec::from_raw_parts(buf, len as usize, len as usize);
                 for d in docs {
@@ -3446,25 +3459,25 @@ impl Drop for YSubdocsEvent {
 #[repr(C)]
 pub struct YStateVector {
     /// Number of clients. It describes a length of both `client_ids` and `clocks` arrays.
-    pub entries_count: c_int,
+    pub entries_count: u32,
     /// Array of unique client identifiers (length is given in `entries_count` field). Each client
     /// ID has corresponding clock attached, which can be found in `clocks` field under the same
     /// index.
-    pub client_ids: *mut c_longlong,
+    pub client_ids: *mut u64,
     /// Array of clocks (length is given in `entries_count` field) known for each client. Each clock
     /// has a corresponding client identifier attached, which can be found in `client_ids` field
     /// under the same index.
-    pub clocks: *mut c_int,
+    pub clocks: *mut u32,
 }
 
 impl YStateVector {
     unsafe fn new(sv: &StateVector) -> Self {
-        let entries_count = sv.len() as c_int;
+        let entries_count = sv.len() as u32;
         let mut client_ids = Vec::with_capacity(sv.len());
         let mut clocks = Vec::with_capacity(sv.len());
         for (&client, &clock) in sv.iter() {
-            client_ids.push(client as c_longlong);
-            clocks.push(clock as c_int);
+            client_ids.push(client as u64);
+            clocks.push(clock as u32);
         }
 
         YStateVector {
@@ -3489,11 +3502,11 @@ impl Drop for YStateVector {
 #[repr(C)]
 pub struct YDeleteSet {
     /// Number of client identifier entries.
-    pub entries_count: c_int,
+    pub entries_count: u32,
     /// Array of unique client identifiers (length is given in `entries_count` field). Each client
     /// ID has corresponding sequence of ranges attached, which can be found in `ranges` field under
     /// the same index.
-    pub client_ids: *mut c_longlong,
+    pub client_ids: *mut u64,
     /// Array of range sequences (length is given in `entries_count` field). Each sequence has
     /// a corresponding client ID attached, which can be found in `client_ids` field under
     /// the same index.
@@ -3507,22 +3520,22 @@ impl YDeleteSet {
         let mut ranges = Vec::with_capacity(len);
 
         for (&client, range) in ds.iter() {
-            client_ids.push(client as c_longlong);
+            client_ids.push(client);
             let seq: Vec<_> = range
                 .iter()
                 .map(|r| YIdRange {
-                    start: r.start as c_int,
-                    end: r.end as c_int,
+                    start: r.start as u32,
+                    end: r.end as u32,
                 })
                 .collect();
             ranges.push(YIdRangeSeq {
-                len: seq.len() as c_int,
+                len: seq.len() as u32,
                 seq: Box::into_raw(seq.into_boxed_slice()) as *mut _,
             })
         }
 
         YDeleteSet {
-            entries_count: len as c_int,
+            entries_count: len as u32,
             client_ids: Box::into_raw(client_ids.into_boxed_slice()) as *mut _,
             ranges: Box::into_raw(ranges.into_boxed_slice()) as *mut _,
         }
@@ -3542,7 +3555,7 @@ impl Drop for YDeleteSet {
 #[repr(C)]
 pub struct YIdRangeSeq {
     /// Number of ranges stored in this sequence.
-    pub len: c_int,
+    pub len: u32,
     /// Array (length is stored in `len` field) or ranges. Each range is a pair of [start, end)
     /// values, describing continuous collection of items produced by the same client, identified
     /// by clock values, that this range refers to.
@@ -3558,8 +3571,8 @@ impl Drop for YIdRangeSeq {
 
 #[repr(C)]
 pub struct YIdRange {
-    pub start: c_int,
-    pub end: c_int,
+    pub start: u32,
+    pub end: u32,
 }
 
 #[repr(C)]
@@ -3788,7 +3801,7 @@ impl Deref for YXmlTextEvent {
 /// Releases a callback subscribed via `ytext_observe` function represented by passed
 /// observer parameter.
 #[no_mangle]
-pub unsafe extern "C" fn ytext_unobserve(txt: *const Branch, subscription_id: c_uint) {
+pub unsafe extern "C" fn ytext_unobserve(txt: *const Branch, subscription_id: u32) {
     let txt = TextRef::from_raw_branch(txt);
     txt.unobserve(subscription_id as SubscriptionId);
 }
@@ -3796,7 +3809,7 @@ pub unsafe extern "C" fn ytext_unobserve(txt: *const Branch, subscription_id: c_
 /// Releases a callback subscribed via `yarray_observe` function represented by passed
 /// observer parameter.
 #[no_mangle]
-pub unsafe extern "C" fn yarray_unobserve(array: *const Branch, subscription_id: c_uint) {
+pub unsafe extern "C" fn yarray_unobserve(array: *const Branch, subscription_id: u32) {
     let txt = ArrayRef::from_raw_branch(array);
     txt.unobserve(subscription_id as SubscriptionId);
 }
@@ -3804,7 +3817,7 @@ pub unsafe extern "C" fn yarray_unobserve(array: *const Branch, subscription_id:
 /// Releases a callback subscribed via `ymap_observe` function represented by passed
 /// observer parameter.
 #[no_mangle]
-pub unsafe extern "C" fn ymap_unobserve(map: *const Branch, subscription_id: c_uint) {
+pub unsafe extern "C" fn ymap_unobserve(map: *const Branch, subscription_id: u32) {
     let map = MapRef::from_raw_branch(map);
     map.unobserve(subscription_id as SubscriptionId);
 }
@@ -3812,7 +3825,7 @@ pub unsafe extern "C" fn ymap_unobserve(map: *const Branch, subscription_id: c_u
 /// Releases a callback subscribed via `yxmlelem_observe` function represented by passed
 /// observer parameter.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_unobserve(xml: *const Branch, subscription_id: c_uint) {
+pub unsafe extern "C" fn yxmlelem_unobserve(xml: *const Branch, subscription_id: u32) {
     let xml = XmlElementRef::from_raw_branch(xml);
     xml.unobserve(subscription_id as SubscriptionId);
 }
@@ -3820,7 +3833,7 @@ pub unsafe extern "C" fn yxmlelem_unobserve(xml: *const Branch, subscription_id:
 /// Releases a callback subscribed via `yxmltext_observe` function represented by passed
 /// observer parameter.
 #[no_mangle]
-pub unsafe extern "C" fn yxmltext_unobserve(xml: *const Branch, subscription_id: c_uint) {
+pub unsafe extern "C" fn yxmltext_unobserve(xml: *const Branch, subscription_id: u32) {
     let xml = XmlTextRef::from_raw_branch(xml);
     xml.unobserve(subscription_id as SubscriptionId);
 }
@@ -3828,7 +3841,7 @@ pub unsafe extern "C" fn yxmltext_unobserve(xml: *const Branch, subscription_id:
 /// Releases a callback subscribed via `yobserve_deep` function represented by passed
 /// observer parameter.
 #[no_mangle]
-pub unsafe extern "C" fn yunobserve_deep(ytype: *mut Branch, subscription_id: c_uint) {
+pub unsafe extern "C" fn yunobserve_deep(ytype: *mut Branch, subscription_id: u32) {
     assert!(!ytype.is_null());
     let branch = ytype.as_mut().unwrap();
     branch.unobserve_deep(subscription_id as SubscriptionId);
@@ -3883,13 +3896,13 @@ pub unsafe extern "C" fn yxmltext_event_target(e: *const YXmlTextEvent) -> *mut 
 #[no_mangle]
 pub unsafe extern "C" fn ytext_event_path(
     e: *const YTextEvent,
-    len: *mut c_int,
+    len: *mut u32,
 ) -> *mut YPathSegment {
     assert!(!e.is_null());
     let e = &*e;
     let path: Vec<_> = e.path().into_iter().map(YPathSegment::from).collect();
     let out = path.into_boxed_slice();
-    *len = out.len() as c_int;
+    *len = out.len() as u32;
     Box::into_raw(out) as *mut _
 }
 
@@ -3900,15 +3913,12 @@ pub unsafe extern "C" fn ytext_event_path(
 ///
 /// Path returned this way should be eventually released using `ypath_destroy`.
 #[no_mangle]
-pub unsafe extern "C" fn ymap_event_path(
-    e: *const YMapEvent,
-    len: *mut c_int,
-) -> *mut YPathSegment {
+pub unsafe extern "C" fn ymap_event_path(e: *const YMapEvent, len: *mut u32) -> *mut YPathSegment {
     assert!(!e.is_null());
     let e = &*e;
     let path: Vec<_> = e.path().into_iter().map(YPathSegment::from).collect();
     let out = path.into_boxed_slice();
-    *len = out.len() as c_int;
+    *len = out.len() as u32;
     Box::into_raw(out) as *mut _
 }
 
@@ -3921,13 +3931,13 @@ pub unsafe extern "C" fn ymap_event_path(
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_event_path(
     e: *const YXmlEvent,
-    len: *mut c_int,
+    len: *mut u32,
 ) -> *mut YPathSegment {
     assert!(!e.is_null());
     let e = &*e;
     let path: Vec<_> = e.path().into_iter().map(YPathSegment::from).collect();
     let out = path.into_boxed_slice();
-    *len = out.len() as c_int;
+    *len = out.len() as u32;
     Box::into_raw(out) as *mut _
 }
 
@@ -3940,13 +3950,13 @@ pub unsafe extern "C" fn yxmlelem_event_path(
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_event_path(
     e: *const YXmlTextEvent,
-    len: *mut c_int,
+    len: *mut u32,
 ) -> *mut YPathSegment {
     assert!(!e.is_null());
     let e = &*e;
     let path: Vec<_> = e.path().into_iter().map(YPathSegment::from).collect();
     let out = path.into_boxed_slice();
-    *len = out.len() as c_int;
+    *len = out.len() as u32;
     Box::into_raw(out) as *mut _
 }
 
@@ -3959,20 +3969,20 @@ pub unsafe extern "C" fn yxmltext_event_path(
 #[no_mangle]
 pub unsafe extern "C" fn yarray_event_path(
     e: *const YArrayEvent,
-    len: *mut c_int,
+    len: *mut u32,
 ) -> *mut YPathSegment {
     assert!(!e.is_null());
     let e = &*e;
     let path: Vec<_> = e.path().into_iter().map(YPathSegment::from).collect();
     let out = path.into_boxed_slice();
-    *len = out.len() as c_int;
+    *len = out.len() as u32;
     Box::into_raw(out) as *mut _
 }
 
 /// Releases allocated memory used by objects returned from path accessor functions of shared type
 /// events.
 #[no_mangle]
-pub unsafe extern "C" fn ypath_destroy(path: *mut YPathSegment, len: c_int) {
+pub unsafe extern "C" fn ypath_destroy(path: *mut YPathSegment, len: u32) {
     if !path.is_null() {
         drop(Vec::from_raw_parts(path, len as usize, len as usize));
     }
@@ -3985,13 +3995,13 @@ pub unsafe extern "C" fn ypath_destroy(path: *mut YPathSegment, len: c_int) {
 /// Delta returned from this function should eventually be released using `yevent_delta_destroy`
 /// function.
 #[no_mangle]
-pub unsafe extern "C" fn ytext_event_delta(e: *const YTextEvent, len: *mut c_int) -> *mut YDelta {
+pub unsafe extern "C" fn ytext_event_delta(e: *const YTextEvent, len: *mut u32) -> *mut YDelta {
     assert!(!e.is_null());
     let e = &*e;
     let delta: Vec<_> = e.delta(e.txn()).into_iter().map(YDelta::from).collect();
 
     let out = delta.into_boxed_slice();
-    *len = out.len() as c_int;
+    *len = out.len() as u32;
     Box::into_raw(out) as *mut _
 }
 
@@ -4004,14 +4014,14 @@ pub unsafe extern "C" fn ytext_event_delta(e: *const YTextEvent, len: *mut c_int
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_event_delta(
     e: *const YXmlTextEvent,
-    len: *mut c_int,
+    len: *mut u32,
 ) -> *mut YDelta {
     assert!(!e.is_null());
     let e = &*e;
     let delta: Vec<_> = e.delta(e.txn()).into_iter().map(YDelta::from).collect();
 
     let out = delta.into_boxed_slice();
-    *len = out.len() as c_int;
+    *len = out.len() as u32;
     Box::into_raw(out) as *mut _
 }
 
@@ -4024,7 +4034,7 @@ pub unsafe extern "C" fn yxmltext_event_delta(
 #[no_mangle]
 pub unsafe extern "C" fn yarray_event_delta(
     e: *const YArrayEvent,
-    len: *mut c_int,
+    len: *mut u32,
 ) -> *mut YEventChange {
     assert!(!e.is_null());
     let e = &*e;
@@ -4035,7 +4045,7 @@ pub unsafe extern "C" fn yarray_event_delta(
         .collect();
 
     let out = delta.into_boxed_slice();
-    *len = out.len() as c_int;
+    *len = out.len() as u32;
     Box::into_raw(out) as *mut _
 }
 
@@ -4048,7 +4058,7 @@ pub unsafe extern "C" fn yarray_event_delta(
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_event_delta(
     e: *const YXmlEvent,
-    len: *mut c_int,
+    len: *mut u32,
 ) -> *mut YEventChange {
     assert!(!e.is_null());
     let e = &*e;
@@ -4059,13 +4069,13 @@ pub unsafe extern "C" fn yxmlelem_event_delta(
         .collect();
 
     let out = delta.into_boxed_slice();
-    *len = out.len() as c_int;
+    *len = out.len() as u32;
     Box::into_raw(out) as *mut _
 }
 
 /// Releases memory allocated by the object returned from `yevent_delta` function.
 #[no_mangle]
-pub unsafe extern "C" fn ytext_delta_destroy(delta: *mut YDelta, len: c_int) {
+pub unsafe extern "C" fn ytext_delta_destroy(delta: *mut YDelta, len: u32) {
     if !delta.is_null() {
         let delta = Vec::from_raw_parts(delta, len as usize, len as usize);
         drop(delta);
@@ -4074,7 +4084,7 @@ pub unsafe extern "C" fn ytext_delta_destroy(delta: *mut YDelta, len: c_int) {
 
 /// Releases memory allocated by the object returned from `yevent_delta` function.
 #[no_mangle]
-pub unsafe extern "C" fn yevent_delta_destroy(delta: *mut YEventChange, len: c_int) {
+pub unsafe extern "C" fn yevent_delta_destroy(delta: *mut YEventChange, len: u32) {
     if !delta.is_null() {
         let delta = Vec::from_raw_parts(delta, len as usize, len as usize);
         drop(delta);
@@ -4090,7 +4100,7 @@ pub unsafe extern "C" fn yevent_delta_destroy(delta: *mut YEventChange, len: c_i
 #[no_mangle]
 pub unsafe extern "C" fn ymap_event_keys(
     e: *const YMapEvent,
-    len: *mut c_int,
+    len: *mut u32,
 ) -> *mut YEventKeyChange {
     assert!(!e.is_null());
     let e = &*e;
@@ -4101,7 +4111,7 @@ pub unsafe extern "C" fn ymap_event_keys(
         .collect();
 
     let out = delta.into_boxed_slice();
-    *len = out.len() as c_int;
+    *len = out.len() as u32;
     Box::into_raw(out) as *mut _
 }
 
@@ -4113,7 +4123,7 @@ pub unsafe extern "C" fn ymap_event_keys(
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_event_keys(
     e: *const YXmlEvent,
-    len: *mut c_int,
+    len: *mut u32,
 ) -> *mut YEventKeyChange {
     assert!(!e.is_null());
     let e = &*e;
@@ -4124,7 +4134,7 @@ pub unsafe extern "C" fn yxmlelem_event_keys(
         .collect();
 
     let out = delta.into_boxed_slice();
-    *len = out.len() as c_int;
+    *len = out.len() as u32;
     Box::into_raw(out) as *mut _
 }
 
@@ -4136,7 +4146,7 @@ pub unsafe extern "C" fn yxmlelem_event_keys(
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_event_keys(
     e: *const YXmlTextEvent,
-    len: *mut c_int,
+    len: *mut u32,
 ) -> *mut YEventKeyChange {
     assert!(!e.is_null());
     let e = &*e;
@@ -4147,16 +4157,212 @@ pub unsafe extern "C" fn yxmltext_event_keys(
         .collect();
 
     let out = delta.into_boxed_slice();
-    *len = out.len() as c_int;
+    *len = out.len() as u32;
     Box::into_raw(out) as *mut _
 }
 
 /// Releases memory allocated by the object returned from `yxml_event_keys` and `ymap_event_keys`
 /// functions.
 #[no_mangle]
-pub unsafe extern "C" fn yevent_keys_destroy(keys: *mut YEventKeyChange, len: c_int) {
+pub unsafe extern "C" fn yevent_keys_destroy(keys: *mut YEventKeyChange, len: u32) {
     if !keys.is_null() {
         drop(Vec::from_raw_parts(keys, len as usize, len as usize));
+    }
+}
+
+#[repr(C)]
+pub struct YUndoManagerOptions {
+    pub capture_timeout_millis: u32,
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager(
+    doc: *const Doc,
+    ytype: *const Branch,
+    options: *const YUndoManagerOptions,
+) -> *mut UndoManager {
+    let doc = doc.as_ref().unwrap();
+    let branch = ytype.as_ref().unwrap();
+
+    let mut o = yrs::undo::Options::default();
+    if let Some(options) = options.as_ref() {
+        if options.capture_timeout_millis >= 0 {
+            o.capture_timeout_millis = options.capture_timeout_millis as u64;
+        }
+    };
+    let boxed = Box::new(UndoManager::with_options(doc, &BranchPtr::from(branch), o));
+    Box::into_raw(boxed)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_destroy(mgr: *mut UndoManager) {
+    drop(Box::from_raw(mgr));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_add_origin(
+    mgr: *mut UndoManager,
+    origin_len: u32,
+    origin: *const c_char,
+) {
+    let mgr = mgr.as_mut().unwrap();
+    let bytes = std::slice::from_raw_parts(origin as *const u8, origin_len as usize);
+    mgr.include_origin(Origin::from(bytes));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_remove_origin(
+    mgr: *mut UndoManager,
+    origin_len: u32,
+    origin: *const c_char,
+) {
+    let mgr = mgr.as_mut().unwrap();
+    let bytes = std::slice::from_raw_parts(origin as *const u8, origin_len as usize);
+    mgr.exclude_origin(Origin::from(bytes));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_add_scope(mgr: *mut UndoManager, ytype: *const Branch) {
+    let mgr = mgr.as_mut().unwrap();
+    let branch = ytype.as_ref().unwrap();
+    mgr.expand_scope(&BranchPtr::from(branch));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_clear(mgr: *mut UndoManager) -> u8 {
+    let mgr = mgr.as_mut().unwrap();
+    match mgr.clear() {
+        Ok(_) => Y_TRUE,
+        Err(_) => Y_FALSE,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_stop(mgr: *mut UndoManager) {
+    let mgr = mgr.as_mut().unwrap();
+    mgr.reset();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut UndoManager) -> u8 {
+    let mgr = mgr.as_mut().unwrap();
+    match mgr.undo() {
+        Ok(_) => Y_TRUE,
+        Err(_) => Y_FALSE,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_redo(mgr: *mut UndoManager) -> u8 {
+    let mgr = mgr.as_mut().unwrap();
+    match mgr.redo() {
+        Ok(_) => Y_TRUE,
+        Err(_) => Y_FALSE,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_can_undo(mgr: *mut UndoManager) -> u8 {
+    let mgr = mgr.as_mut().unwrap();
+    if mgr.can_undo() {
+        Y_TRUE
+    } else {
+        Y_FALSE
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_can_redo(mgr: *mut UndoManager) -> u8 {
+    let mgr = mgr.as_mut().unwrap();
+    if mgr.can_redo() {
+        Y_TRUE
+    } else {
+        Y_FALSE
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_observe_added(
+    mgr: *mut UndoManager,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YUndoEvent),
+) -> u32 {
+    let mgr = mgr.as_mut().unwrap();
+    let subscription_id: SubscriptionId = mgr
+        .observe_item_added(move |_, e| {
+            let event = YUndoEvent::new(e);
+            cb(state, &event as *const YUndoEvent);
+        })
+        .into();
+    subscription_id
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_unobserve_added(
+    mgr: *mut UndoManager,
+    subscription_id: u32,
+) {
+    let mgr = mgr.as_mut().unwrap();
+    mgr.unobserve_item_added(subscription_id as SubscriptionId);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_observe_popped(
+    mgr: *mut UndoManager,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YUndoEvent),
+) -> u32 {
+    let mgr = mgr.as_mut().unwrap();
+    let subscription_id: SubscriptionId = mgr
+        .observe_item_popped(move |_, e| {
+            let event = YUndoEvent::new(e);
+            cb(state, &event as *const YUndoEvent);
+        })
+        .into();
+    subscription_id
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_unobserve_popped(
+    mgr: *mut UndoManager,
+    subscription_id: u32,
+) {
+    let mgr = mgr.as_mut().unwrap();
+    mgr.unobserve_item_popped(subscription_id as SubscriptionId);
+}
+
+pub const Y_KIND_UNDO: c_char = 0;
+pub const Y_KIND_REDO: c_char = 1;
+
+#[repr(C)]
+pub struct YUndoEvent {
+    pub kind: c_char,
+    pub origin: *const c_char,
+    pub origin_len: u32,
+    pub insertions: YDeleteSet,
+    pub deletions: YDeleteSet,
+}
+
+impl YUndoEvent {
+    unsafe fn new(e: &yrs::undo::Event) -> Self {
+        let (origin, origin_len) = if let Some(origin) = e.origin.as_ref() {
+            let bytes = origin.as_ref();
+            let origin_len = bytes.len() as u32;
+            let origin = bytes.as_ptr() as *const c_char;
+            (origin, origin_len)
+        } else {
+            (null(), 0)
+        };
+        YUndoEvent {
+            kind: match e.kind {
+                EventKind::Undo => Y_KIND_UNDO,
+                EventKind::Redo => Y_KIND_REDO,
+            },
+            origin,
+            origin_len,
+            insertions: YDeleteSet::new(e.item.insertions()),
+            deletions: YDeleteSet::new(e.item.deletions()),
+        }
     }
 }
 
@@ -4164,7 +4370,7 @@ pub unsafe extern "C" fn yevent_keys_destroy(keys: *mut YEventKeyChange, len: c_
 /// Returns either 0 when `branch` is null or one of values: `Y_ARRAY`, `Y_TEXT`, `Y_MAP`,
 /// `Y_XML_ELEM`, `Y_XML_TEXT`.
 #[no_mangle]
-pub unsafe extern "C" fn ytype_kind(branch: *const Branch) -> c_char {
+pub unsafe extern "C" fn ytype_kind(branch: *const Branch) -> i8 {
     if let Some(branch) = branch.as_ref() {
         match branch.type_ref() {
             TYPE_REFS_ARRAY => Y_ARRAY,
@@ -4223,7 +4429,7 @@ impl From<PathSegment> for YPathSegment {
             PathSegment::Index(index) => YPathSegment {
                 tag: Y_EVENT_PATH_INDEX,
                 value: YPathSegmentCase {
-                    index: index as c_int,
+                    index: index as u32,
                 },
             },
         }
@@ -4243,7 +4449,7 @@ impl Drop for YPathSegment {
 #[repr(C)]
 pub union YPathSegmentCase {
     pub key: *const c_char,
-    pub index: c_int,
+    pub index: u32,
 }
 
 /// Tag used to identify `YEventChange` (see: `yevent_delta` function) case, when a new element
@@ -4288,7 +4494,7 @@ pub struct YEventChange {
 
     /// Number of element affected by current type of a change. It can refer to a number of
     /// inserted `values`, number of deleted element or a number of retained (unchanged) values.  
-    pub len: c_int,
+    pub len: u32,
 
     /// Used in case when current change is of `Y_EVENT_CHANGE_ADD` type. Contains a list (of
     /// length stored in `len` field) of newly inserted values.
@@ -4303,7 +4509,7 @@ impl<'a> From<&'a Change> for YEventChange {
                     .into_iter()
                     .map(|v| YOutput::from(v.clone()))
                     .collect();
-                let len = out.len() as c_int;
+                let len = out.len() as u32;
                 let out = out.into_boxed_slice();
                 let values = Box::into_raw(out) as *mut _;
 
@@ -4315,12 +4521,12 @@ impl<'a> From<&'a Change> for YEventChange {
             }
             Change::Removed(len) => YEventChange {
                 tag: Y_EVENT_CHANGE_DELETE,
-                len: *len as c_int,
+                len: *len as u32,
                 values: null(),
             },
             Change::Retain(len) => YEventChange {
                 tag: Y_EVENT_CHANGE_RETAIN,
-                len: *len as c_int,
+                len: *len as u32,
                 values: null(),
             },
         }
@@ -4372,14 +4578,14 @@ pub struct YDelta {
 
     /// Number of element affected by current type of a change. It can refer to a number of
     /// inserted `values`, number of deleted element or a number of retained (unchanged) values.  
-    pub len: c_int,
+    pub len: u32,
 
     /// Used in case when current change is of `Y_EVENT_CHANGE_ADD` type. Contains a list (of
     /// length stored in `len` field) of newly inserted values.
     pub insert: *mut YOutput,
 
     /// A number of formatting attributes assigned to an edited area represented by this delta.
-    pub attributes_len: c_int,
+    pub attributes_len: u32,
 
     /// A nullable pointer to a list of formatting attributes assigned to an edited area represented
     /// by this delta.
@@ -4390,7 +4596,7 @@ impl YDelta {
     fn insert(value: &Value, attrs: &Option<Box<Attrs>>) -> Self {
         let insert = Box::into_raw(Box::new(YOutput::from(value.clone())));
         let (attributes_len, attributes) = if let Some(attrs) = attrs {
-            let len = attrs.len() as c_int;
+            let len = attrs.len() as u32;
             let attrs: Vec<_> = attrs.iter().map(|(k, v)| YDeltaAttr::new(k, v)).collect();
             let attrs = Box::into_raw(attrs.into_boxed_slice()) as *mut _;
             (len, attrs)
@@ -4409,7 +4615,7 @@ impl YDelta {
 
     fn retain(len: u32, attrs: &Option<Box<Attrs>>) -> Self {
         let (attributes_len, attributes) = if let Some(attrs) = attrs {
-            let len = attrs.len() as c_int;
+            let len = attrs.len() as u32;
             let attrs: Vec<_> = attrs.iter().map(|(k, v)| YDeltaAttr::new(k, v)).collect();
             let attrs = Box::into_raw(attrs.into_boxed_slice()) as *mut _;
             (len, attrs)
@@ -4418,7 +4624,7 @@ impl YDelta {
         };
         YDelta {
             tag: Y_EVENT_CHANGE_RETAIN,
-            len: len as c_int,
+            len: len as u32,
             insert: null_mut(),
             attributes_len,
             attributes,
@@ -4428,7 +4634,7 @@ impl YDelta {
     fn delete(len: u32) -> Self {
         YDelta {
             tag: Y_EVENT_CHANGE_DELETE,
-            len: len as c_int,
+            len: len as u32,
             insert: null_mut(),
             attributes_len: 0,
             attributes: null_mut(),
@@ -4586,6 +4792,128 @@ where
     }
 }
 
+/// A sticky index is based on the Yjs model and is not affected by document changes.
+/// E.g. If you place a sticky index before a certain character, it will always point to this character.
+/// If you place a sticky index at the end of a type, it will always point to the end of the type.
+///
+/// A numeric position is often unsuited for user selections, because it does not change when content is inserted
+/// before or after.
+///
+/// ```Insert(0, 'x')('a.bc') = 'xa.bc'``` Where `.` is the sticky index position.
+///
+/// Instances of `YStickyIndex` can be freed using `ysticky_index_destroy`.
+#[repr(transparent)]
+pub struct YStickyIndex(StickyIndex);
+
+impl From<StickyIndex> for YStickyIndex {
+    #[inline(always)]
+    fn from(value: StickyIndex) -> Self {
+        YStickyIndex(value)
+    }
+}
+
+/// Releases resources allocated by `YStickyIndex` pointers.
+#[no_mangle]
+pub unsafe extern "C" fn ysticky_index_destroy(pos: *mut YStickyIndex) {
+    drop(Box::from_raw(pos))
+}
+
+/// Returns association of current `YStickyIndex`.
+/// If association is **after** the referenced inserted character, returned number will be >= 0.
+/// If association is **before** the referenced inserted character, returned number will be < 0.
+#[no_mangle]
+pub unsafe extern "C" fn ysticky_index_assoc(pos: *const YStickyIndex) -> i8 {
+    let pos = pos.as_ref().unwrap();
+    match pos.0.assoc {
+        Assoc::After => 0,
+        Assoc::Before => -1,
+    }
+}
+
+/// Retrieves a `YStickyIndex` corresponding to a given human-readable `index` pointing into
+/// the shared y-type `branch`. Unlike standard indexes sticky one enables to track
+/// the location inside of a shared y-types, even in the face of concurrent updates.
+///
+/// If association is >= 0, the resulting position will point to location **after** the referenced index.
+/// If association is < 0, the resulting position will point to location **before** the referenced index.
+#[no_mangle]
+pub unsafe extern "C" fn ysticky_index_from_index(
+    branch: *const Branch,
+    txn: *mut Transaction,
+    index: u32,
+    assoc: i8,
+) -> *mut YStickyIndex {
+    assert!(!branch.is_null());
+    assert!(!txn.is_null());
+
+    let branch = BranchPtr::from_raw_branch(branch);
+    let txn = txn.as_mut().unwrap();
+    let index = index as u32;
+    let assoc = if assoc >= 0 {
+        Assoc::After
+    } else {
+        Assoc::Before
+    };
+
+    if let Some(txn) = txn.as_mut() {
+        if let Some(pos) = StickyIndex::at(txn, branch, index, assoc) {
+            Box::into_raw(Box::new(YStickyIndex(pos)))
+        } else {
+            null_mut()
+        }
+    } else {
+        panic!("ysticky_index_from_index requires a read-write transaction");
+    }
+}
+
+/// Serializes `YStickyIndex` into binary representation. `len` parameter is updated with byte
+/// length of the generated binary. Returned binary can be free'd using `ybinary_destroy`.  
+#[no_mangle]
+pub unsafe extern "C" fn ysticky_index_encode(
+    pos: *const YStickyIndex,
+    len: *mut u32,
+) -> *mut c_char {
+    let pos = pos.as_ref().unwrap();
+    let binary = pos.0.encode_v1().into_boxed_slice();
+    *len = binary.len() as u32;
+    Box::into_raw(binary) as *mut c_char
+}
+
+/// Deserializes `YStickyIndex` from the payload previously serialized using `ysticky_index_encode`.
+#[no_mangle]
+pub unsafe extern "C" fn ysticky_index_decode(
+    binary: *const c_char,
+    len: u32,
+) -> *mut YStickyIndex {
+    let slice = std::slice::from_raw_parts(binary as *const u8, len as usize);
+    if let Ok(pos) = StickyIndex::decode_v1(slice) {
+        Box::into_raw(Box::new(YStickyIndex(pos)))
+    } else {
+        null_mut()
+    }
+}
+
+/// Given `YStickyIndex` and transaction reference, if computes a human-readable index in a
+/// context of the referenced shared y-type.
+///
+/// `out_branch` is getting assigned with a corresponding shared y-type reference.
+/// `out_index` will be used to store computed human-readable index.
+#[no_mangle]
+pub unsafe extern "C" fn ysticky_index_read(
+    pos: *const YStickyIndex,
+    txn: *const Transaction,
+    out_branch: *mut *mut Branch,
+    out_index: *mut u32,
+) {
+    let pos = pos.as_ref().unwrap();
+    let txn = txn.as_ref().unwrap();
+
+    if let Some(abs) = pos.0.get_offset(txn) {
+        *out_branch = abs.branch.as_ref() as *const Branch as *mut Branch;
+        *out_index = abs.index as u32;
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::*;
@@ -4596,7 +4924,7 @@ mod test {
             let doc = ydoc_new();
             let array_name = CString::new("test").unwrap();
             let array = yarray(doc, array_name.as_ptr());
-            let txn = ydoc_write_transaction(doc);
+            let txn = ydoc_write_transaction(doc, 0, null());
 
             let y_true = yinput_bool(Y_TRUE);
             let y_false = yinput_bool(Y_FALSE);

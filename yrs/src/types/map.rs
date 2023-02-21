@@ -1,4 +1,4 @@
-use crate::block::{Block, ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, BlockPtr, EmbedPrelim, ItemContent, ItemPosition, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_keys, Branch, BranchPtr, Entries, EntryChange, EventHandler, Observers, Path, ToJson,
@@ -9,6 +9,7 @@ use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
+use std::convert::{TryFrom, TryInto};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
@@ -16,10 +17,45 @@ use std::rc::Rc;
 /// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
 /// shared data types.
 ///
-/// In terms of conflict resolution, [Map] uses logical last-write-wins principle, meaning the past
+/// In terms of conflict resolution, [MapRef] uses logical last-write-wins principle, meaning the past
 /// updates are automatically overridden and discarded by newer ones, while concurrent updates made
 /// by different peers are resolved into a single value using document id seniority to establish
 /// order.
+///
+/// # Example
+///
+/// ```rust
+///
+/// use lib0::any;
+/// use yrs::{Doc, Map, MapPrelim, Transact};
+/// use yrs::types::ToJson;
+///
+/// let doc = Doc::new();
+/// let map = doc.get_or_insert_map("map");
+/// let mut txn = doc.transact_mut();
+///
+/// // insert value
+/// map.insert(&mut txn, "key1", "value1");
+///
+/// // insert nested shared type
+/// let nested = map.insert(&mut txn, "key2", MapPrelim::from([("inner", "value2")]));
+/// nested.insert(&mut txn, "inner2", 100);
+///
+/// assert_eq!(map.to_json(&txn), any!({
+///   "key1": "value1",
+///   "key2": {
+///     "inner": "value2",
+///     "inner2": 100
+///   }
+/// }));
+///
+/// // get value
+/// assert_eq!(map.get(&txn, "key1"), Some("value1".into()));
+///
+/// // remove entry
+/// map.remove(&mut txn, "key1");
+/// assert_eq!(map.get(&txn, "key1"), None);
+/// ```
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct MapRef(BranchPtr);
@@ -74,6 +110,18 @@ impl AsMut<Branch> for MapRef {
     }
 }
 
+impl TryFrom<BlockPtr> for MapRef {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Some(branch) = value.clone().as_branch() {
+            Ok(MapRef::from(branch))
+        } else {
+            Err(value)
+        }
+    }
+}
+
 pub trait Map: AsRef<Branch> {
     /// Returns a number of entries stored within current map.
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
@@ -107,15 +155,13 @@ pub trait Map: AsRef<Branch> {
         MapIter::new(self.as_ref(), txn)
     }
 
-    /// Inserts a new `value` under given `key` into current map. Returns a value stored previously
-    /// under the same key (if any existed).
-    fn insert<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> Option<Value>
+    /// Inserts a new `value` under given `key` into current map. Returns an integrated value.
+    fn insert<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> V::Return
     where
         K: Into<Rc<str>>,
         V: Prelim,
     {
         let key = key.into();
-        let previous = self.get(txn, &key);
         let pos = {
             let inner = self.as_ref();
             let left = inner.map.get(&key);
@@ -128,8 +174,12 @@ pub trait Map: AsRef<Branch> {
             }
         };
 
-        txn.create_item(&pos, value, Some(key));
-        previous
+        let ptr = txn.create_item(&pos, value, Some(key));
+        if let Ok(integrated) = ptr.try_into() {
+            integrated
+        } else {
+            panic!("Defect: unexpected integrated type")
+        }
     }
 
     /// Removes a stored within current map under a given `key`. Returns that value or `None` if
@@ -147,7 +197,7 @@ pub trait Map: AsRef<Branch> {
     }
 
     /// Checks if an entry with given `key` can be found within current map.
-    fn contains<T: ReadTxn>(&self, txn: &T, key: &str) -> bool {
+    fn contains_key<T: ReadTxn>(&self, txn: &T, key: &str) -> bool {
         if let Some(ptr) = self.as_ref().map.get(key) {
             if let Block::Item(item) = ptr.deref() {
                 return !item.is_deleted();
@@ -279,7 +329,23 @@ impl<T> From<HashMap<String, T>> for MapPrelim<T> {
     }
 }
 
+impl<K, V, const N: usize> From<[(K, V); N]> for MapPrelim<V>
+where
+    K: Into<String>,
+    V: Prelim,
+{
+    fn from(arr: [(K, V); N]) -> Self {
+        let mut m = HashMap::with_capacity(N);
+        for (k, v) in arr {
+            m.insert(k.into(), v);
+        }
+        MapPrelim::from(m)
+    }
+}
+
 impl<T: Prelim> Prelim for MapPrelim<T> {
+    type Return = MapRef;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = Branch::new(TYPE_REFS_MAP, None);
         (ItemContent::Type(inner), Some(self))
@@ -290,6 +356,13 @@ impl<T: Prelim> Prelim for MapPrelim<T> {
         for (key, value) in self.0 {
             map.insert(txn, key, value);
         }
+    }
+}
+
+impl<T: Prelim> Into<EmbedPrelim<MapPrelim<T>>> for MapPrelim<T> {
+    #[inline]
+    fn into(self) -> EmbedPrelim<MapPrelim<T>> {
+        EmbedPrelim::Shared(self)
     }
 }
 
@@ -354,6 +427,7 @@ mod test {
         Array, ArrayPrelim, Doc, Map, MapPrelim, MapRef, Observable, StateVector, Text, Transact,
         Update,
     };
+    use lib0::any;
     use lib0::any::Any;
     use rand::distributions::Alphanumeric;
     use rand::prelude::{SliceRandom, StdRng};
@@ -405,13 +479,11 @@ mod test {
             );
             assert_eq!(
                 m.get(txn, &"object".to_owned()),
-                Some(Value::from({
-                    let mut m = HashMap::new();
-                    let mut n = HashMap::new();
-                    n.insert("key2".to_owned(), Any::String("value".into()));
-                    m.insert("key".to_owned(), Any::Map(Box::new(n)));
-                    m
-                }))
+                Some(Value::from(any!({
+                    "key": {
+                        "key2": "value"
+                    }
+                })))
             );
         }
 
@@ -824,7 +896,7 @@ mod test {
                     ArrayPrelim::from(vec![1, 2, 3, 4]),
                 );
             } else if rng.gen_bool(0.33) {
-                map.insert(&mut txn, key.to_string(), TextPrelim("deeptext"));
+                map.insert(&mut txn, key.to_string(), TextPrelim::new("deeptext"));
             } else {
                 map.insert(
                     &mut txn,
@@ -873,8 +945,7 @@ mod test {
             *count += 1;
         });
 
-        map.insert(&mut doc.transact_mut(), "map", MapPrelim::<String>::new());
-        let nested = map.get(&map.transact(), "map").unwrap().to_ymap().unwrap();
+        let nested = map.insert(&mut doc.transact_mut(), "map", MapPrelim::<String>::new());
         nested.insert(
             &mut doc.transact_mut(),
             "array",
@@ -887,12 +958,7 @@ mod test {
             .unwrap();
         nested2.insert(&mut doc.transact_mut(), 0, "content");
 
-        nested.insert(&mut doc.transact_mut(), "text", TextPrelim("text"));
-        let nested_text = nested
-            .get(&nested.transact(), "text")
-            .unwrap()
-            .to_ytext()
-            .unwrap();
+        let nested_text = nested.insert(&mut doc.transact_mut(), "text", TextPrelim::new("text"));
         nested_text.push(&mut doc.transact_mut(), "!");
 
         assert_eq!(*calls.borrow().deref(), 5);

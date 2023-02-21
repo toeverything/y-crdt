@@ -1,7 +1,7 @@
 use crate::block::{Block, BlockPtr, ClientID, ItemContent, Prelim};
-use crate::event::{AfterTransactionEvent, SubdocsEvent, UpdateEvent};
-use crate::store::{Store, StoreRef, WeakStoreRef};
-use crate::transaction::{Transaction, TransactionMut};
+use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
+use crate::store::{Store, StoreRef};
+use crate::transaction::{Origin, Transaction, TransactionMut};
 use crate::types::{
     Branch, BranchPtr, ToJson, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
@@ -9,6 +9,7 @@ use crate::types::{
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
+use crate::UndoManager;
 use crate::{
     uuid_v4, ArrayRef, MapRef, ReadTxn, SubscriptionId, TextRef, Uuid, WriteTxn, XmlElementRef,
     XmlFragmentRef, XmlTextRef,
@@ -18,8 +19,9 @@ use lib0::any::Any;
 use lib0::error::Error;
 use rand::Rng;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt::Formatter;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -31,9 +33,9 @@ use thiserror::Error;
 /// Document manages so called root types, which are top-level shared types definitions (as opposed
 /// to recursively nested types).
 ///
-/// A basic workflow sample:
+/// # Example
 ///
-/// ```
+/// ```rust
 /// use yrs::{Doc, ReadTxn, StateVector, Text, Transact, Update};
 /// use yrs::updates::decoder::Decode;
 /// use yrs::updates::encoder::Encode;
@@ -61,7 +63,6 @@ pub struct Doc {
 }
 
 unsafe impl Send for Doc {}
-/// Impl'd for OctoBase
 unsafe impl Sync for Doc {}
 
 impl Doc {
@@ -76,6 +77,7 @@ impl Doc {
         Self::with_options(Options::with_client_id(client_id))
     }
 
+    /// Creates a new document with a configured set of [Options].
     pub fn with_options(options: Options) -> Self {
         Doc {
             store: Store::new(options).into(),
@@ -117,6 +119,12 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
+    ///
+    /// # Panics
+    ///
+    /// This method requires an exclusive access to an underlying document store. If there
+    /// is another transaction in process, it will panic. It's advised to define all root shared
+    /// types during the document creation.
     pub fn get_or_insert_text(&self, name: &str) -> TextRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -137,6 +145,12 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a map (in such case a map component of complex data type will be
     /// interpreted as native map).
+    ///
+    /// # Panics
+    ///
+    /// This method requires an exclusive access to an underlying document store. If there
+    /// is another transaction in process, it will panic. It's advised to define all root shared
+    /// types during the document creation.
     pub fn get_or_insert_map(&self, name: &str) -> MapRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -156,6 +170,12 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as an array (in such case a sequence component of complex data type will be
     /// interpreted as a list of inserted values).
+    ///
+    /// # Panics
+    ///
+    /// This method requires an exclusive access to an underlying document store. If there
+    /// is another transaction in process, it will panic. It's advised to define all root shared
+    /// types during the document creation.
     pub fn get_or_insert_array(&self, name: &str) -> ArrayRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -177,6 +197,12 @@ impl Doc {
     /// reinterpreted as a XML element (in such case a map component of complex data type will be
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
+    ///
+    /// # Panics
+    ///
+    /// This method requires an exclusive access to an underlying document store. If there
+    /// is another transaction in process, it will panic. It's advised to define all root shared
+    /// types during the document creation.
     pub fn get_or_insert_xml_fragment(&self, name: &str) -> XmlFragmentRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -198,6 +224,12 @@ impl Doc {
     /// reinterpreted as a XML element (in such case a map component of complex data type will be
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
+    ///
+    /// # Panics
+    ///
+    /// This method requires an exclusive access to an underlying document store. If there
+    /// is another transaction in process, it will panic. It's advised to define all root shared
+    /// types during the document creation.
     pub fn get_or_insert_xml_element(&self, name: &str) -> XmlElementRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -217,6 +249,12 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
+    ///
+    /// # Panics
+    ///
+    /// This method requires an exclusive access to an underlying document store. If there
+    /// is another transaction in process, it will panic. It's advised to define all root shared
+    /// types during the document creation.
     pub fn get_or_insert_xml_text(&self, name: &str) -> XmlTextRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -250,7 +288,7 @@ impl Doc {
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These
-    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v2] if
+    /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2] if
     /// necessary or passed to remote peers right away. This callback is triggered on function
     /// commit.
     ///
@@ -264,7 +302,7 @@ impl Doc {
         events.observe_update_v2(f)
     }
 
-    /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
+    /// Manually unsubscribes from a callback used in [Doc::observe_update_v2] method.
     pub fn unobserve_update_v2(&self, subscription_id: SubscriptionId) {
         let r = self.store.try_borrow().unwrap();
         if let Some(events) = r.events.as_ref() {
@@ -277,20 +315,40 @@ impl Doc {
     pub fn observe_transaction_cleanup<F>(
         &self,
         f: F,
-    ) -> Result<AfterTransactionSubscription, BorrowMutError>
+    ) -> Result<TransactionCleanupSubscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &AfterTransactionEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &TransactionCleanupEvent) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
         events.observe_transaction_cleanup(f)
     }
 
-    /// Cancels the transaction cleanup callback associated with the `subscription_id`
+    /// Manually unsubscribes from a callback used in [Doc::observe_transaction_cleanup] method.
     pub fn unobserve_transaction_cleanup(&self, subscription_id: SubscriptionId) {
         let r = self.store.try_borrow().unwrap();
         if let Some(events) = r.events.as_ref() {
             events.unobserve_transaction_cleanup(subscription_id)
+        }
+    }
+
+    pub fn observe_after_transaction<F>(
+        &self,
+        f: F,
+    ) -> Result<AfterTransactionSubscription, BorrowMutError>
+    where
+        F: Fn(&mut TransactionMut) -> () + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events.observe_after_transaction(f)
+    }
+
+    /// Manually unsubscribes from a callback used in [Doc::observe_after_transaction] method.
+    pub fn unobserve_after_transaction(&self, subscription_id: SubscriptionId) {
+        let r = self.store.try_borrow().unwrap();
+        if let Some(events) = r.events.as_ref() {
+            events.unobserve_after_transaction(subscription_id)
         }
     }
 
@@ -305,7 +363,7 @@ impl Doc {
         events.observe_subdocs(f)
     }
 
-    /// Cancels the subscription created previously using [Doc::observe_subdocs].
+    /// Manually unsubscribes from a callback used in [Doc::observe_subdocs] method.
     pub fn unobserve_subdocs(&self, subscription_id: SubscriptionId) {
         let r = self.store.try_borrow().unwrap();
         if let Some(events) = r.events.as_ref() {
@@ -323,7 +381,7 @@ impl Doc {
         events.observe_destroy(f)
     }
 
-    /// Cancels the subscription created previously using [Doc::observe_subdocs].
+    /// Manually unsubscribes from a callback used in [Doc::observe_destroy] method.
     pub fn unobserve_destroy(&self, subscription_id: SubscriptionId) {
         let r = self.store.try_borrow().unwrap();
         if let Some(events) = r.events.as_ref() {
@@ -394,6 +452,8 @@ impl Doc {
         }
     }
 
+    /// If current document has been inserted as a sub-document, returns a reference to a parent
+    /// document, which contains it.
     pub fn parent_doc(&self) -> Option<Doc> {
         let store = unsafe { self.store.0.as_ptr().as_ref() }.unwrap();
         if let Some(Block::Item(item)) = store.parent.as_deref() {
@@ -415,10 +475,6 @@ impl Doc {
     pub(crate) fn addr(&self) -> DocAddr {
         DocAddr::new(&self)
     }
-
-    pub fn weak_ref(&self) -> WeakStoreRef {
-        self.store.weak_ref()
-    }
 }
 
 impl PartialEq for Doc {
@@ -434,14 +490,34 @@ impl std::fmt::Display for Doc {
     }
 }
 
+impl TryFrom<BlockPtr> for Doc {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Block::Item(item) = value.deref() {
+            if let ItemContent::Doc(_, doc) = &item.content {
+                return Ok(doc.clone());
+            }
+        }
+        Err(value)
+    }
+}
+
+/// Subscription type for callbacks registered via [Doc::observe_update_v1] and [Doc::observe_update_v2].
 pub type UpdateSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>;
 
-pub type AfterTransactionSubscription =
-    crate::Subscription<Arc<dyn Fn(&TransactionMut, &AfterTransactionEvent) -> ()>>;
+/// Subscription type for callbacks registered via [Doc::observe_transaction_cleanup].
+pub type TransactionCleanupSubscription =
+    crate::Subscription<Arc<dyn Fn(&TransactionMut, &TransactionCleanupEvent) -> ()>>;
 
+/// Subscription type for callbacks registered via [Doc::observe_after_transaction].
+pub type AfterTransactionSubscription = crate::Subscription<Arc<dyn Fn(&mut TransactionMut) -> ()>>;
+
+/// Subscription type for callbacks registered via [Doc::observe_subdocs].
 pub type SubdocsSubscription =
     crate::Subscription<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>;
 
+/// Subscription type for callbacks registered via [Doc::observe_destroy].
 pub type DestroySubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &Doc) -> ()>>;
 
 impl Default for Doc {
@@ -463,22 +539,37 @@ impl ToJson for Doc {
 /// Configuration options of [Doc] instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
-    /// Globally unique 53-bit long client identifier.
+    /// Globally unique client identifier. This value must be unique across all active collaborating
+    /// peers, otherwise a update collisions will happen, causing document store state to be corrupted.
+    ///
+    /// Default value: randomly generated.
     pub client_id: ClientID,
     /// A globally unique identifier for this document.
+    ///
+    /// Default value: randomly generated UUID v4.
     pub guid: Uuid,
     /// Associate this document with a collection. This only plays a role if your provider has
     /// a concept of collection.
+    ///
+    /// Default value: `None`.
     pub collection_id: Option<String>,
     /// How to we count offsets and lengths used in text operations.
+    ///
+    /// Default value: [OffsetKind::Bytes].
     pub offset_kind: OffsetKind,
     /// Determines if transactions commits should try to perform GC-ing of deleted items.
+    ///
+    /// Default value: `false`.
     pub skip_gc: bool,
     /// If a subdocument, automatically load document. If this is a subdocument, remote peers will
     /// load the document as well automatically.
+    ///
+    /// Default value: `false`.
     pub auto_load: bool,
     /// Whether the document should be synced by the provider now.
-    /// This is toggled to true when you call ydoc.load()
+    /// This is toggled to true when you call ydoc.load().
+    ///
+    /// Default value: `true`.
     pub should_load: bool,
 }
 
@@ -581,23 +672,82 @@ pub enum OffsetKind {
     Utf32,
 }
 
+/// Trait implemented by [Doc] and shared types, used for carrying over the responsibilities of
+/// creating new transactions, used as a unit of work in Yrs.
 pub trait Transact {
-    /// Creates a transaction used for all kind of block store operations.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    /// Creates and returns a lightweight read-only transaction.
+    ///
+    /// # Errors
+    ///
+    /// While it's possible to have multiple read-only transactions active at the same time,
+    /// this method will return a [TransactionAcqError::SharedAcqFailed] error whenever called
+    /// while a read-write transaction (see: [Self::try_transact_mut]) is active at the same time.
     fn try_transact(&self) -> Result<Transaction, TransactionAcqError>;
 
-    /// Creates a transaction used for all kind of block store operations.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    /// Creates and returns a read-write capable transaction. This transaction can be used to
+    /// mutate the contents of underlying document store and upon dropping or committing it may
+    /// subscription callbacks.
+    ///
+    /// # Errors
+    ///
+    /// Only one read-write transaction can be active at the same time. If any other transaction -
+    /// be it a read-write or read-only one - is active at the same time, this method will return
+    /// a [TransactionAcqError::ExclusiveAcqFailed] error.
     fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError>;
 
-    /// Creates a transaction used for all kind of block store operations.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    /// Creates and returns a read-write capable transaction with an `origin` classifier attached.
+    /// This transaction can be used to mutate the contents of underlying document store and upon
+    /// dropping or committing it may subscription callbacks.
+    ///
+    /// An `origin` may be used to identify context of operations made (example updates performed
+    /// locally vs. incoming from remote replicas) and it's used i.e. by [UndoManager].
+    ///
+    /// # Errors
+    ///
+    /// Only one read-write transaction can be active at the same time. If any other transaction -
+    /// be it a read-write or read-only one - is active at the same time, this method will return
+    /// a [TransactionAcqError::ExclusiveAcqFailed] error.
+    fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut, TransactionAcqError>
+    where
+        T: Into<Origin>;
+
+    /// Creates and returns a read-write capable transaction with an `origin` classifier attached.
+    /// This transaction can be used to mutate the contents of underlying document store and upon
+    /// dropping or committing it may subscription callbacks.
+    ///
+    /// An `origin` may be used to identify context of operations made (example updates performed
+    /// locally vs. incoming from remote replicas) and it's used i.e. by [UndoManager].
+    ///
+    /// # Errors
+    ///
+    /// Only one read-write transaction can be active at the same time. If any other transaction -
+    /// be it a read-write or read-only one - is active at the same time, this method will panic.
+    fn transact_mut_with<T>(&self, origin: T) -> TransactionMut
+    where
+        T: Into<Origin>,
+    {
+        self.try_transact_mut_with(origin).unwrap()
+    }
+
+    /// Creates and returns a lightweight read-only transaction.
+    ///
+    /// # Panics
+    ///
+    /// While it's possible to have multiple read-only transactions active at the same time,
+    /// this method will panic whenever called while a read-write transaction
+    /// (see: [Self::transact_mut]) is active at the same time.
     fn transact(&self) -> Transaction {
         self.try_transact().unwrap()
     }
 
-    /// Creates a transaction used for all kind of block store operations.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    /// Creates and returns a read-write capable transaction. This transaction can be used to
+    /// mutate the contents of underlying document store and upon dropping or committing it may
+    /// subscription callbacks.
+    ///
+    /// # Errors
+    ///
+    /// Only one read-write transaction can be active at the same time. If any other transaction -
+    /// be it a read-write or read-only one - is active at the same time, this method will panic.
     fn transact_mut(&self) -> TransactionMut {
         self.try_transact_mut().unwrap()
     }
@@ -609,7 +759,17 @@ impl Transact for Doc {
     }
 
     fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError> {
-        Ok(TransactionMut::new(self.store.try_borrow_mut()?))
+        Ok(TransactionMut::new(self.store.try_borrow_mut()?, None))
+    }
+
+    fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut, TransactionAcqError>
+    where
+        T: Into<Origin>,
+    {
+        Ok(TransactionMut::new(
+            self.store.try_borrow_mut()?,
+            Some(origin.into()),
+        ))
     }
 }
 
@@ -630,7 +790,24 @@ impl Transact for Branch {
         if let Some(store) = store.0.upgrade() {
             let store_ref = store.try_borrow_mut()?;
             let store_ref: AtomicRefMut<'a, Store> = unsafe { std::mem::transmute(store_ref) };
-            Ok(TransactionMut::new(store_ref))
+            Ok(TransactionMut::new(store_ref, None))
+        } else {
+            Err(TransactionAcqError::DocumentDropped)
+        }
+    }
+
+    fn try_transact_mut_with<'a, T>(
+        &'a self,
+        origin: T,
+    ) -> Result<TransactionMut<'a>, TransactionAcqError>
+    where
+        T: Into<Origin>,
+    {
+        let store = self.store.as_ref().unwrap();
+        if let Some(store) = store.0.upgrade() {
+            let store_ref = store.try_borrow_mut()?;
+            let store_ref: AtomicRefMut<'a, Store> = unsafe { std::mem::transmute(store_ref) };
+            Ok(TransactionMut::new(store_ref, Some(origin.into())))
         } else {
             Err(TransactionAcqError::DocumentDropped)
         }
@@ -672,9 +849,19 @@ where
         let branch = self.as_ref();
         branch.try_transact_mut()
     }
+
+    fn try_transact_mut_with<O>(&self, origin: O) -> Result<TransactionMut, TransactionAcqError>
+    where
+        O: Into<Origin>,
+    {
+        let branch = self.as_ref();
+        branch.try_transact_mut_with(origin)
+    }
 }
 
 impl Prelim for Doc {
+    type Return = Doc;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         if self.parent_doc().is_some() {
             panic!("Cannot integrate the document, because it's already being used as a sub-document elsewhere");
@@ -710,8 +897,9 @@ mod test {
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         Array, ArrayPrelim, DeleteSet, Doc, GetString, Map, Options, StateVector, SubscriptionId,
-        Text, Transact, Uuid,
+        Text, Transact, Uuid, XmlElementPrelim, XmlFragment,
     };
+    use lib0::any;
     use lib0::any::Any;
     use std::cell::{Cell, RefCell, RefMut};
     use std::collections::BTreeSet;
@@ -1466,8 +1654,7 @@ mod test {
         });
         {
             let mut txn = doc.transact_mut();
-            subdocs.insert(&mut txn, "a", doc_a);
-            let doc_a_ref = subdocs.get(&txn, "a").unwrap().to_ydoc().unwrap();
+            let doc_a_ref = subdocs.insert(&mut txn, "a", doc_a);
             doc_a_ref.load(&mut txn);
         }
 
@@ -1530,8 +1717,7 @@ mod test {
         });
         {
             let mut txn = doc.transact_mut();
-            subdocs.insert(&mut txn, "c", doc_c);
-            let doc_c_ref = subdocs.get(&txn, "c").unwrap().to_ydoc().unwrap();
+            let doc_c_ref = subdocs.insert(&mut txn, "c", doc_c);
             doc_c_ref.load(&mut txn);
         }
         let actual = event.take();
@@ -1611,8 +1797,7 @@ mod test {
         });
         let mut doc_ref = {
             let mut txn = doc.transact_mut();
-            array.insert(&mut txn, 0, subdoc_1);
-            let doc_ref = array.get(&txn, 0).unwrap().to_ydoc().unwrap();
+            let doc_ref = array.insert(&mut txn, 0, subdoc_1);
             let o = doc_ref.options();
             assert!(o.should_load);
             assert!(!o.auto_load);
@@ -1695,8 +1880,7 @@ mod test {
 
         let mut subdoc_1 = {
             let mut txn = doc.transact_mut();
-            array.insert(&mut txn, 0, subdoc_1);
-            array.get(&txn, 0).unwrap().to_ydoc().unwrap()
+            array.insert(&mut txn, 0, subdoc_1)
         };
         assert!(subdoc_1.options().should_load);
         assert!(subdoc_1.options().auto_load);
@@ -1752,5 +1936,48 @@ mod test {
             last_event,
             Some((vec![uuid_3.clone()], vec![], vec![uuid_3.clone()]))
         );
+    }
+
+    #[test]
+    fn to_json() {
+        let doc = Doc::new();
+        let text = doc.get_or_insert_text("text");
+        let array = doc.get_or_insert_array("array");
+        let map = doc.get_or_insert_map("map");
+        let xml_text = doc.get_or_insert_xml_text("xml-text");
+        let xml_fragment = doc.get_or_insert_xml_fragment("xml-fragment");
+        let xml_element = doc.get_or_insert_xml_element("xml-element");
+
+        let mut txn = doc.transact_mut();
+
+        text.push(&mut txn, "hello");
+        xml_text.push(&mut txn, "world");
+        xml_fragment.insert(&mut txn, 0, XmlElementPrelim::empty("div"));
+        xml_element.insert(&mut txn, 0, XmlElementPrelim::empty("body"));
+        array.insert_range(&mut txn, 0, [1, 2, 3]);
+        map.insert(&mut txn, "key1", "value1");
+
+        // sub documents cannot use their parent's transaction
+        let sub_doc = Doc::new();
+        let sub_text = sub_doc.get_or_insert_text("sub-text");
+        let sub_doc = map.insert(&mut txn, "sub-doc", sub_doc);
+        let mut sub_txn = sub_doc.transact_mut();
+        sub_text.push(&mut sub_txn, "sample");
+
+        let actual = doc.to_json(&txn);
+        let expected = any!({
+            "text": "hello",
+            "array": [1,2,3],
+            "map": {
+                "key1": "value1",
+                "sub-doc": {
+                    "guid": sub_doc.guid().as_ref()
+                }
+            },
+            "xml-text": "world",
+            "xml-fragment": "<div></div>",
+            "xml-element": "<xml-element><body></body></xml-element>"
+        });
+        assert_eq!(actual, expected);
     }
 }

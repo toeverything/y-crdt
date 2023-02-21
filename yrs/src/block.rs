@@ -4,9 +4,9 @@ use crate::store::{Store, WeakStoreRef};
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
 use crate::types::{
-    Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_DOC, TYPE_REFS_MAP,
-    TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
-    TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
+    Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK,
+    TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -16,6 +16,7 @@ use lib0::any::Any;
 use lib0::error::Error;
 use smallstr::SmallString;
 use std::collections::HashSet;
+use std::convert::TryFrom;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::panic;
@@ -68,18 +69,19 @@ pub const HAS_ORIGIN: u8 = 0b10000000;
 /// for blocks which act as map-like types entries.
 pub const HAS_PARENT_SUB: u8 = 0b00100000;
 
-/// Globally unique client identifier.
+/// Globally unique client identifier. No two active peers are allowed to share the same [ClientID].
+/// If that happens, following updates may cause document store to be corrupted and desync in a result.
 pub type ClientID = u64;
 
 /// Block identifier, which allows to uniquely identify any element insertion in a global scope
-/// (across different replicas of the same document). It consists of client ID (which is unique
+/// (across different replicas of the same document). It consists of client ID (which is a unique
 /// document replica identifier) and monotonically incrementing clock value.
 ///
 /// [ID] corresponds to a [Lamport timestamp](https://en.wikipedia.org/wiki/Lamport_timestamp) in
 /// terms of its properties and guarantees.
 #[derive(Debug, Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct ID {
-    /// Unique identifier of a client, which inserted corresponding item.
+    /// Unique identifier of a client.
     pub client: ClientID,
 
     /// Monotonically incrementing sequence number, which informs about order of inserted item
@@ -95,13 +97,197 @@ impl ID {
     }
 }
 
-/// A logical block pointer. It contains a unique block [ID], but also contains a helper metadata
-/// which allows to faster locate block it points to within a block store.
+/// A raw [Block] pointer. As the underlying block doesn't move it's in-memory location, [BlockPtr]
+/// can be considered a pinned object.
 #[repr(transparent)]
 #[derive(Clone, Copy, Hash)]
-pub(crate) struct BlockPtr(NonNull<Block>);
+pub struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
+    pub(crate) fn redo(
+        &mut self,
+        txn: &mut TransactionMut,
+        redo_items: &HashSet<BlockPtr>,
+        items_to_delete: &DeleteSet,
+    ) -> Option<BlockPtr> {
+        let self_ptr = self.clone();
+        let item = self.as_item_mut()?;
+        if let Some(redone) = item.redone.as_ref() {
+            let slice = txn.store.blocks.get_item_clean_start(redone)?;
+            return Some(txn.store.materialize(slice));
+        }
+
+        let mut parent_block = item.parent.as_branch().and_then(|b| b.item);
+        // make sure that parent is redone
+        if let Some(mut ptr) = parent_block.clone() {
+            if let Block::Item(parent) = ptr.clone().deref_mut() {
+                if parent.is_deleted() {
+                    // try to undo parent if it will be undone anyway
+                    if parent.redone.is_none()
+                        && (!redo_items.contains(&ptr)
+                            || ptr.redo(txn, redo_items, items_to_delete).is_none())
+                    {
+                        return None;
+                    }
+                    let mut redone = parent.redone;
+                    while let Some(id) = redone.as_ref() {
+                        parent_block = txn
+                            .store
+                            .blocks
+                            .get_item_clean_start(id)
+                            .map(|slice| txn.store.materialize(slice));
+                        redone = parent_block.and_then(|ptr| ptr.as_item().and_then(|i| i.redone));
+                    }
+                }
+            }
+        }
+        let parent_branch =
+            BranchPtr::from(if let Some(Block::Item(item)) = parent_block.as_deref() {
+                if let ItemContent::Type(b) = &item.content {
+                    b.as_ref()
+                } else {
+                    item.parent.as_branch().unwrap()
+                }
+            } else {
+                item.parent.as_branch().unwrap()
+            });
+
+        let mut left = None;
+        let mut right = None;
+        if let Some(sub) = item.parent_sub.as_ref() {
+            if item.right.is_some() {
+                left = Some(self_ptr);
+                // Iterate right while right is in itemsToDelete
+                // If it is intended to delete right while item is redone,
+                // we can expect that item should replace right.
+                while let Some(Block::Item(left_item)) = left.as_deref() {
+                    if let Some(right_ptr) = left_item.right {
+                        if items_to_delete.is_deleted(right_ptr.id()) {
+                            left = Some(right_ptr);
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                // follow redone
+                // trace redone until parent matches
+                while let Some(Block::Item(left_item)) = left.as_deref() {
+                    if let Some(redone) = left_item.redone.as_ref() {
+                        if let Some(slice) = txn.store.blocks.get_item_clean_start(redone) {
+                            let ptr = txn.store.materialize(slice);
+                            left = Some(ptr);
+                            continue;
+                        }
+                    }
+                    break;
+                }
+
+                if let Some(Block::Item(left_item)) = left.as_deref() {
+                    if left_item.right.is_some() {
+                        // It is not possible to redo this item because it conflicts with a
+                        // change from another client
+                        return None;
+                    }
+                }
+            } else {
+                left = parent_branch.map.get(sub).cloned();
+            }
+        } else {
+            // Is an array item. Insert at the old position
+            left = item.left;
+            right = Some(self_ptr);
+            // find next cloned_redo items
+            while let Some(Block::Item(left_item)) = left.clone().as_deref() {
+                let mut left_trace = left;
+                while let Some(Block::Item(trace)) = left_trace.as_deref() {
+                    let p = trace.parent.as_branch().and_then(|p| p.item);
+                    if parent_block != p {
+                        left_trace = if let Some(redone) = trace.redone.as_ref() {
+                            let slice = txn.store.blocks.get_item_clean_start(redone);
+                            slice.map(|s| txn.store.materialize(s))
+                        } else {
+                            None
+                        };
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(Block::Item(trace)) = left_trace.as_deref() {
+                    let p = trace.parent.as_branch().and_then(|p| p.item);
+                    if parent_block == p {
+                        left = left_trace;
+                        break;
+                    }
+                }
+                left = left_item.left.clone();
+            }
+
+            while let Some(Block::Item(right_item)) = right.clone().as_deref() {
+                let mut right_trace = right;
+                // trace redone until parent matches
+                while let Some(Block::Item(trace)) = right_trace.as_deref() {
+                    let p = trace.parent.as_branch().and_then(|p| p.item);
+                    if parent_block != p {
+                        right_trace = if let Some(redone) = trace.redone.as_ref() {
+                            let slice = txn.store.blocks.get_item_clean_start(redone);
+                            slice.map(|s| txn.store.materialize(s))
+                        } else {
+                            None
+                        };
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(Block::Item(trace)) = right_trace.as_deref() {
+                    let p = trace.parent.as_branch().and_then(|p| p.item);
+                    if parent_block == p {
+                        right = right_trace;
+                        break;
+                    }
+                }
+                right = right_item.right.clone();
+            }
+        }
+
+        let next_clock = txn.store.get_local_state();
+        let next_id = ID::new(txn.store.options.client_id, next_clock);
+        let mut redone_item = Item::new(
+            next_id,
+            left,
+            left.map(|p| p.last_id()),
+            right,
+            right.map(|p| *p.id()),
+            TypePtr::Branch(parent_branch),
+            item.parent_sub.clone(),
+            item.content.clone(),
+        );
+        item.redone = Some(*redone_item.id());
+        redone_item.as_item_mut().unwrap().info.set_keep();
+        let mut block_ptr = BlockPtr::from(&mut redone_item);
+
+        block_ptr.integrate(txn, 0);
+
+        let local_block_list = txn.store_mut().blocks.get_client_blocks_mut(next_id.client);
+        local_block_list.push(redone_item);
+        Some(block_ptr)
+    }
+
+    pub(crate) fn keep(&self, keep: bool) {
+        let mut curr = Some(*self);
+        while let Some(Block::Item(item)) = curr.as_deref_mut() {
+            if item.info.is_keep() == keep {
+                break;
+            } else {
+                if keep {
+                    item.info.set_keep();
+                } else {
+                    item.info.clear_keep();
+                }
+                curr = item.parent.as_branch().and_then(|b| b.item);
+            }
+        }
+    }
+
     pub(crate) fn delete_as_cleanup(&self, txn: &mut TransactionMut, is_local: bool) {
         txn.delete(*self);
         if is_local {
@@ -139,6 +325,7 @@ impl BlockPtr {
                         moved: item.moved.clone(),
                         parent_sub: item.parent_sub.clone(),
                         info: item.info.clone(),
+                        redone: item.redone.map(|id| ID::new(id.client, id.clock + offset)),
                     }));
                     let new_ptr = BlockPtr::from(&mut new);
 
@@ -166,7 +353,7 @@ impl BlockPtr {
 
     /// Integrates current block into block store.
     /// If it returns true, it means that the block should be deleted after being added to a block store.
-    pub fn integrate(&mut self, txn: &mut TransactionMut, offset: u32) -> bool {
+    pub(crate) fn integrate(&mut self, txn: &mut TransactionMut, offset: u32) -> bool {
         let self_ptr = self.clone();
         match self.deref_mut() {
             Block::GC(this) => this.integrate(offset),
@@ -174,14 +361,18 @@ impl BlockPtr {
                 let store = txn.store_mut();
                 let encoding = store.options.offset_kind;
                 if offset > 0 {
-                    // offset is used only for locally integrated items
+                    // offset could be > 0 only in context of Update::integrate,
+                    // is such case offset kind in use always means Yjs-compatible offset (utf-16)
                     this.id.clock += offset;
                     this.left = store
                         .blocks
                         .get_item_clean_end(&ID::new(this.id.client, this.id.clock - 1))
                         .map(|slice| store.materialize(slice));
                     this.origin = this.left.as_deref().map(|b: &Block| b.last_id());
-                    this.content = this.content.splice(offset as usize, encoding).unwrap();
+                    this.content = this
+                        .content
+                        .splice(offset as usize, OffsetKind::Utf16)
+                        .unwrap();
                     this.len -= offset;
                 }
 
@@ -436,7 +627,7 @@ impl BlockPtr {
 
     pub(crate) fn gc(&mut self, parent_gced: bool) {
         if let Block::Item(item) = self.deref_mut() {
-            if item.is_deleted() {
+            if item.is_deleted() && !item.info.is_keep() {
                 item.content.gc();
                 let len = item.len();
                 if parent_gced {
@@ -455,7 +646,7 @@ impl BlockPtr {
     /// blocks are of the same type, their contents are of the same type, they belong to the same
     /// parent data structure, their IDs are sequenced directly one after another and they point to
     /// each other as their left/right neighbors respectively.
-    pub fn try_squash(&mut self, mut other: BlockPtr) -> bool {
+    pub(crate) fn try_squash(&mut self, mut other: BlockPtr) -> bool {
         let self_ptr = self.clone();
         let other_ptr = other.clone();
         match (self.deref_mut(), other.deref_mut()) {
@@ -466,12 +657,16 @@ impl BlockPtr {
                     && v1.right_origin == v2.right_origin
                     && v1.right == Some(other_ptr)
                     && v1.is_deleted() == v2.is_deleted()
+                    && (v1.redone.is_none() && v2.redone.is_none())
                     && v1.moved == v2.moved
                     && v1.content.try_squash(&v2.content)
                 {
                     v1.len = v1.content.len(OffsetKind::Utf16);
                     if let Some(Block::Item(right_right)) = v2.right.as_deref_mut() {
                         right_right.left = Some(self_ptr);
+                    }
+                    if v2.info.is_keep() {
+                        v1.info.set_keep();
                     }
                     v1.right = v2.right;
                     true
@@ -532,6 +727,31 @@ impl PartialEq for BlockPtr {
     }
 }
 
+impl TryFrom<BlockPtr> for Any {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Block::Item(item) = value.deref() {
+            match &item.content {
+                ItemContent::Any(v) => Ok(v[0].clone()),
+                ItemContent::Embed(v) => Ok(*v.clone()),
+                ItemContent::Binary(v) => Ok(v.clone().into()),
+                ItemContent::JSON(v) => Ok(v[0].clone().into()),
+                ItemContent::String(v) => Ok(v.to_string().into()),
+                _ => Err(value),
+            }
+        } else {
+            Err(value)
+        }
+    }
+}
+
+/// Defines a logical slice of an underlying [Block]. Yrs blocks define a series of sequential
+/// updates performed by a single peer, while [BlockSlice]s enable to refer to a sub-range of these
+/// blocks without need to splice them.
+///
+/// If an underlying [Block] needs to be spliced to fit the boundaries defined by a corresponding
+/// [BlockSlice], this can be done with help of transaction (see: [Store::materialize]).
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct BlockSlice {
     ptr: BlockPtr,
@@ -588,22 +808,27 @@ impl BlockSlice {
         self.ptr
     }
 
+    /// Returns an offset within contained [Block] marking the (inclusive) beginning of this slice.
     pub fn start(&self) -> u32 {
         self.start
     }
 
+    /// Returns an offset within contained [Block] marking the (inclusive) end of this slice.
     pub fn end(&self) -> u32 {
         self.end
     }
 
+    /// Checks if an underlying [Block] has been marked as deleted.
     pub fn is_deleted(&self) -> bool {
         self.ptr.is_deleted()
     }
 
+    /// Checks if an underlying [Block] has been marked as countable.
     pub fn is_countable(&self) -> bool {
         self.ptr.is_countable()
     }
 
+    /// Checks if provided `id` exists within the bounds described by current [BlockSlice].
     pub fn contains_id(&self, id: &ID) -> bool {
         let myself = self.ptr.id();
         myself.client == id.client
@@ -671,6 +896,15 @@ impl BlockSlice {
         }
     }
 
+    /// Returns a [BlockSlice] wrapper for a [Block] identified as a right neighbor of this slice.
+    /// This method doesn't have to be equivalent of [Item::right]: if current slices's end range
+    /// is not an equivalent to the end of underlying [Block], a returned slice will contain the
+    /// same block that starts when the current ends.
+    ///
+    /// # Example
+    ///
+    /// If an underlying block is responsible for clock range of [0..10) and current slice is [2..8)
+    /// then right slice returned by this method will be [8..10).
     pub fn right(&self) -> Option<BlockSlice> {
         let last_clock = self.ptr.len() - 1;
         if self.end == last_clock {
@@ -685,6 +919,15 @@ impl BlockSlice {
         }
     }
 
+    /// Returns a [BlockSlice] wrapper for a [Block] identified as a left neighbor of this slice.
+    /// This method doesn't have to be equivalent of [Item::right]: if current slices's start range
+    /// is not an equivalent to the start of underlying [Block], a returned slice will contain the
+    /// range that starts with current underlying block start and end where this slice starts.
+    ///
+    /// # Example
+    ///
+    /// If an underlying block is responsible for clock range of [0..10) and current slice is [2..8)
+    /// then right slice returned by this method will be [0..2).
     pub fn left(&self) -> Option<BlockSlice> {
         if self.start == 0 {
             if let Block::Item(item) = self.ptr.deref() {
@@ -705,9 +948,15 @@ impl From<BlockPtr> for BlockSlice {
     }
 }
 
-/// An enum containing all supported block variants.
+/// Block defines a range of consecutive updates performed by the same peer. While individual
+/// updates are always uniquely defined by their corresponding [ID]s, they may contain a lot of
+/// additional metadata. Block representation here is crucial, since it optimizes memory usage,
+/// available when multiple updates have been performed one after another (eg. *when user is writing
+/// a sentence, individual key strokes are independent updates but they can be compresses into a
+/// single block containing an entire sentence for as long as another piece of data is not being
+/// inserted in the middle it*).
 #[derive(PartialEq)]
-pub(crate) enum Block {
+pub enum Block {
     /// An active block containing user data.
     Item(Item),
 
@@ -802,7 +1051,7 @@ impl Block {
         }
     }
 
-    /// Returns a unique identifier of a current block.
+    /// Returns a unique identifier of a first update contained by a current [Block].
     pub fn id(&self) -> &ID {
         match self {
             Block::Item(item) => &item.id,
@@ -830,6 +1079,7 @@ impl Block {
         }
     }
 
+    /// Checks if current block has been deleted and garbage collected.
     pub fn is_gc(&self) -> bool {
         if let Block::GC(_) = self {
             true
@@ -838,6 +1088,7 @@ impl Block {
         }
     }
 
+    /// Checks if current block is an [Item] with active data attached to it.
     pub fn is_item(&self) -> bool {
         if let Block::Item(_) = self {
             true
@@ -846,6 +1097,7 @@ impl Block {
         }
     }
 
+    /// Checks if provided `id` exists within a range defined by the current [Block].
     pub fn contains(&self, id: &ID) -> bool {
         match self {
             Block::Item(v) => v.contains(id),
@@ -917,6 +1169,12 @@ const ITEM_FLAG_COUNTABLE: u8 = 0b0000_0010;
 /// Bit flag (1st bit) used for an item which should be kept - not used atm.
 const ITEM_FLAG_KEEP: u8 = 0b0000_0001;
 
+/// Collection of flags attached to an [Item] - most of them are serializable and define specific
+/// properties of an associated [Item], like:
+///
+/// - Has item been deleted?
+/// - Is item countable (should its content add to the length/offset calculation of containing collection)?
+/// - Should item be kept untouched eg. because it's being tracked by [UndoManager].
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct ItemFlags(u8);
@@ -944,6 +1202,16 @@ impl ItemFlags {
     #[inline]
     pub fn is_keep(&self) -> bool {
         self.check(ITEM_FLAG_KEEP)
+    }
+
+    #[inline]
+    pub fn set_keep(&mut self) {
+        self.set(ITEM_FLAG_KEEP)
+    }
+
+    #[inline]
+    pub fn clear_keep(&mut self) {
+        self.clear(ITEM_FLAG_KEEP)
     }
 
     #[inline]
@@ -984,53 +1252,63 @@ impl Into<u8> for ItemFlags {
     }
 }
 
-/// An item is basic unit of work in Yrs. It contains user data reinforced with all metadata
+/// An item is a basic unit of work in Yrs. It contains user data reinforced with all metadata
 /// required for a potential conflict resolution as well as extra fields used for joining blocks
 /// together as a part of indexed sequences or maps.
 #[derive(PartialEq)]
-/// Pub'd for OctoBase history/raw.rs
 pub struct Item {
-    /// Unique identifier of current item.
+    /// Unique identifier of the first update described by the current [Item].
     pub id: ID,
 
-    pub len: u32,
+    /// A number of splittable updates within a current [Item].
+    pub(crate) len: u32,
 
     /// Pointer to left neighbor of this item. Used in sequenced collections.
-    /// If `None` current item is a first one on it's `parent` collection.
+    /// If `None`, then current item is the first one on its [parent](Item::parent) collection.
     pub(crate) left: Option<BlockPtr>,
 
     /// Pointer to right neighbor of this item. Used in sequenced collections.
-    /// If `None` current item is the last one on it's `parent` collection.
+    /// If `None`, then current item is the last one on its [parent](Item::parent) collection.
+    ///
+    /// For map-like CRDTs if this field is `None`, it means that a current item also contains
+    /// the most recent update for an individual key-value entry.
     pub(crate) right: Option<BlockPtr>,
 
     /// Used for concurrent insert conflict resolution. An ID of a left-side neighbor at the moment
     /// of insertion of current block.
-    pub origin: Option<ID>,
+    pub(crate) origin: Option<ID>,
 
     /// Used for concurrent insert conflict resolution. An ID of a right-side neighbor at the moment
     /// of insertion of current block.
-    pub right_origin: Option<ID>,
+    pub(crate) right_origin: Option<ID>,
 
     /// A user data stored inside of a current item.
-    pub content: ItemContent,
+    pub(crate) content: ItemContent,
 
     /// Pointer to a parent collection containing current item.
-    pub parent: types::TypePtr,
+    pub(crate) parent: TypePtr,
+
+    /// Used by [UndoManager] to track another block that reverts the effects of deletion of current
+    /// item.
+    pub(crate) redone: Option<ID>,
 
     /// Used only when current item is used by map-like types. In such case this item works as a
     /// key-value entry of a map, and this field contains a key used by map.
-    pub parent_sub: Option<Rc<str>>, //TODO: Rc since it's already used in Branch.map component
+    pub(crate) parent_sub: Option<Rc<str>>,
 
     /// This property is reused by the moved prop. In this case this property refers to an Item.
     pub(crate) moved: Option<BlockPtr>,
 
     /// Bit flag field which contains information about specifics of this item.
-    pub info: ItemFlags,
+    pub(crate) info: ItemFlags,
 }
 
+/// Describes a consecutive range of updates (identified by their [ID]s).
 #[derive(PartialEq, Eq, Clone)]
 pub struct BlockRange {
+    /// [ID] of the first update stored within current [BlockRange] bounds.
     pub id: ID,
+    /// Number of splittable updates stored within this [BlockRange].
     pub len: u32,
 }
 
@@ -1039,18 +1317,33 @@ impl BlockRange {
         BlockRange { id, len }
     }
 
+    /// Returns an [ID] of the last update fitting into the bounds of current [BlockRange]
     pub fn last_id(&self) -> ID {
         ID::new(self.id.client, self.id.clock + self.len)
     }
 
-    pub fn slice(&mut self, offset: u32) -> Self {
+    /// Returns a slice of a current [BlockRange], which starts at a given offset (relative to
+    /// current range).
+    ///
+    /// # Example:
+    ///
+    /// ```rust
+    /// use yrs::block::BlockRange;
+    /// use yrs::ID;
+    /// let a = BlockRange::new(ID::new(1, 2), 8); // range of clocks [2..10)
+    /// let b = a.slice(3); // range of clocks [5..10)
+    ///
+    /// assert_eq!(b.id, ID::new(1, 5));
+    /// assert_eq!(b.last_id(), ID::new(1, 10));
+    /// ```
+    pub fn slice(&self, offset: u32) -> Self {
         let mut next = self.clone();
         next.id.clock += offset;
         next.len -= offset;
         next
     }
 
-    pub fn integrate(&mut self, pivot: u32) -> bool {
+    pub(crate) fn integrate(&mut self, pivot: u32) -> bool {
         if pivot > 0 {
             self.id.clock += pivot;
             self.len -= pivot;
@@ -1060,10 +1353,11 @@ impl BlockRange {
     }
 
     #[inline]
-    pub fn merge(&mut self, other: &Self) {
+    pub(crate) fn merge(&mut self, other: &Self) {
         self.len += other.len;
     }
 
+    /// Checks if provided `id` fits inside of boundaries defined by current [BlockRange].
     pub fn contains(&self, id: &ID) -> bool {
         self.id.client == id.client
             && id.clock >= self.id.clock
@@ -1112,6 +1406,7 @@ impl Item {
             parent_sub,
             info,
             moved: None,
+            redone: None,
         }));
         let item_ptr = BlockPtr::from(&mut item);
         if let ItemContent::Type(branch) = &mut item.as_item_mut().unwrap().content {
@@ -1136,14 +1431,16 @@ impl Item {
         None
     }
 
+    /// Checks if provided `id` fits inside of updates defined within bounds of current [Item].
     pub fn contains(&self, id: &ID) -> bool {
         self.id.client == id.client
             && id.clock >= self.id.clock
             && id.clock < self.id.clock + self.len()
     }
 
-    /// Checks if current item is marked as deleted (tombstoned). Yrs uses soft item deletion
-    /// mechanism.
+    /// Checks if current item is marked as deleted (tombstoned).
+    /// Yrs uses soft item deletion mechanism, which means that deleted values are not physically
+    /// erased from memory, but just marked as deleted.
     pub fn is_deleted(&self) -> bool {
         self.info.is_deleted()
     }
@@ -1391,23 +1688,27 @@ pub(crate) fn split_str(str: &str, offset: usize, kind: OffsetKind) -> (&str, &s
     str.split_at(off)
 }
 
-/// An enum describing the type of a user content stored as part of one or more
+/// An enum describing the type of a user data content stored as part of one or more
 /// (if items were squashed) insert operations.
 #[derive(Debug, PartialEq)]
 pub enum ItemContent {
-    /// Any JSON-like primitive type range.
+    /// Collection of consecutively inserted JSON-like primitive values.
     Any(Vec<Any>),
 
-    /// A binary data eg. images.
+    /// A BLOB data eg. images. Binaries are treated as a single objects (they are not subjects to splits).
     Binary(Vec<u8>),
 
     /// A marker for delete item data, which describes a number of deleted elements.
     /// Deleted elements also don't contribute to an overall length of containing collection type.
     Deleted(u32),
 
-    /// Subdocument container. Contains weak reference to a parent document.
+    /// Sub-document container. Contains weak reference to a parent document and a child document.
     Doc(Option<WeakStoreRef>, Doc),
-    JSON(Vec<String>), // String is JSON
+
+    /// Obsolete: collection of consecutively inserted stringified JSON values.
+    JSON(Vec<String>),
+
+    /// A single embedded JSON-like primitive value.
     Embed(Box<Any>),
 
     /// Formatting attribute entry. Format attributes are not considered countable and don't
@@ -1420,6 +1721,10 @@ pub enum ItemContent {
     /// A reference of a branch node. Branch nodes define a complex collection types, such as
     /// arrays, maps or XML elements.
     Type(Box<Branch>),
+
+    /// Marker for destination location of move operation. Move is used to change position of
+    /// previously inserted element in a sequence with respect to other operations that may happen
+    /// concurrently on other peers.
     Move(Box<Move>),
 }
 
@@ -1532,8 +1837,8 @@ impl ItemContent {
                     buf[0] = branch_ref.into();
                     1
                 }
-                ItemContent::Embed(any) => {
-                    buf[0] = Value::Any(any.as_ref().clone());
+                ItemContent::Embed(v) => {
+                    buf[0] = Value::Any(*v.clone());
                     1
                 }
                 ItemContent::Move(_) => 0,
@@ -1543,6 +1848,8 @@ impl ItemContent {
         }
     }
 
+    /// Reads all contents stored in this item and returns them. Use [ItemContent::read] if you need
+    /// to read only slice of elements from the corresponding item.
     pub fn get_content(&self) -> Vec<Value> {
         let len = self.len(OffsetKind::Utf32) as usize;
         let mut values = vec![Value::default(); len];
@@ -1554,6 +1861,7 @@ impl ItemContent {
         }
     }
 
+    /// Returns a first value stored in a corresponding item.
     pub fn get_first(&self) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.first().map(|a| Value::Any(a.clone())),
@@ -1564,13 +1872,14 @@ impl ItemContent {
             ItemContent::JSON(v) => v
                 .first()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
-            ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
+            ItemContent::Embed(v) => Some(Value::Any(*v.clone())),
             ItemContent::Format(_, _) => None,
             ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
             ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
         }
     }
 
+    /// Returns a last value stored in a corresponding item.
     pub fn get_last(&self) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
@@ -1581,7 +1890,7 @@ impl ItemContent {
             ItemContent::JSON(v) => v
                 .last()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
-            ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
+            ItemContent::Embed(v) => Some(Value::Any(*v.clone())),
             ItemContent::Format(_, _) => None,
             ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
             ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
@@ -1772,6 +2081,8 @@ impl ItemContent {
     }
 
     /// Tries to squash two item content structures together.
+    /// Returns `true` if this method had any effect on current [ItemContent] (modified it).
+    /// Otherwise returns `false`.
     pub fn try_squash(&mut self, other: &Self) -> bool {
         //TODO: change `other` to Self (not ref) and return type to Option<Self> (none if merge suceeded)
         match (self, other) {
@@ -1825,6 +2136,25 @@ impl ItemContent {
     }
 }
 
+impl Clone for ItemContent {
+    fn clone(&self) -> Self {
+        match self {
+            ItemContent::Any(array) => ItemContent::Any(array.clone()),
+            ItemContent::Binary(bytes) => ItemContent::Binary(bytes.clone()),
+            ItemContent::Deleted(len) => ItemContent::Deleted(*len),
+            ItemContent::Doc(store, doc) => ItemContent::Doc(store.clone(), doc.clone()),
+            ItemContent::JSON(array) => ItemContent::JSON(array.clone()),
+            ItemContent::Embed(json) => ItemContent::Embed(json.clone()),
+            ItemContent::Format(key, value) => ItemContent::Format(key.clone(), value.clone()),
+            ItemContent::String(chunk) => ItemContent::String(chunk.clone()),
+            ItemContent::Type(branch) => {
+                ItemContent::Type(Branch::new(branch.type_ref(), branch.name.clone()))
+            }
+            ItemContent::Move(range) => ItemContent::Move(range.clone()),
+        }
+    }
+}
+
 impl std::fmt::Debug for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
@@ -1849,6 +2179,9 @@ impl std::fmt::Display for Item {
         }
         if let Some(m) = self.moved {
             write!(f, ", moved-to: {}", m)?;
+        }
+        if let Some(id) = self.redone.as_ref() {
+            write!(f, ", redone: {}", id)?;
         }
         if let Some(origin) = self.origin.as_ref() {
             write!(f, ", origin-l: {}", origin)?;
@@ -1958,8 +2291,12 @@ impl std::fmt::Display for ItemPosition {
     }
 }
 
-/// A trait used for preliminary types, that can be inserted into nested YArray/YMap structures.
+/// A trait used for preliminary types, that can be inserted into shared Yrs collections.
 pub trait Prelim: Sized {
+    /// Type of a value to be returned as a result of inserting this [Prelim] type instance.
+    /// Use [Unused] if none is necessary.
+    type Return: TryFrom<BlockPtr>;
+
     /// This method is used to create initial content required in order to create a block item.
     /// A supplied `ptr` can be used to identify block that is about to be created to store
     /// the returned content.
@@ -1979,6 +2316,8 @@ impl<T> Prelim for T
 where
     T: Into<Any>,
 {
+    type Return = Unused;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let value: Any = self.into();
         (ItemContent::Any(vec![value]), None)
@@ -1991,6 +2330,8 @@ where
 pub(crate) struct PrelimString(pub SmallString<[u8; 8]>);
 
 impl Prelim for PrelimString {
+    type Return = Unused;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::String(self.0.into()), None)
     }
@@ -1998,15 +2339,62 @@ impl Prelim for PrelimString {
     fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
-#[derive(Debug)]
-pub(crate) struct PrelimEmbed(pub Any);
+/// Empty type marker, which can be used by a [Prelim] trait implementations when no integrated
+/// value should be returned after prelim type has been integrated as a result of insertion.
+#[repr(transparent)]
+pub struct Unused;
 
-impl Prelim for PrelimEmbed {
-    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        (ItemContent::Embed(Box::new(self.0)), None)
+impl TryFrom<BlockPtr> for Unused {
+    type Error = BlockPtr;
+
+    #[inline(always)]
+    fn try_from(_: BlockPtr) -> Result<Self, Self::Error> {
+        Ok(Unused)
+    }
+}
+
+/// Prelim container for types passed over to [Text::insert_embed] and [Text::insert_embed_with_attributes] methods.
+#[derive(Debug)]
+pub enum EmbedPrelim<T> {
+    Primitive(Any),
+    Shared(T),
+}
+
+impl<T> Prelim for EmbedPrelim<T>
+where
+    T: Prelim,
+{
+    type Return = T::Return;
+
+    fn into_content(mut self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        match self {
+            EmbedPrelim::Primitive(any) => (ItemContent::Embed(Box::new(any)), None),
+            EmbedPrelim::Shared(prelim) => {
+                let (branch, content) = prelim.into_content(txn);
+                let carrier = if let Some(carrier) = content {
+                    Some(EmbedPrelim::Shared(carrier))
+                } else {
+                    None
+                };
+                (branch, carrier)
+            }
+        }
     }
 
-    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+        if let EmbedPrelim::Shared(carrier) = self {
+            carrier.integrate(txn, inner_ref)
+        }
+    }
+}
+
+impl<T> From<T> for EmbedPrelim<T>
+where
+    T: Into<Any>,
+{
+    fn from(value: T) -> Self {
+        EmbedPrelim::Primitive(value.into())
+    }
 }
 
 impl std::fmt::Display for ID {

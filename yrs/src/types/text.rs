@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
 use crate::types::{
@@ -7,8 +7,11 @@ use crate::types::{
 use crate::utils::OptionExt;
 use crate::*;
 use lib0::any::Any;
+use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
+use std::convert::{TryFrom, TryInto};
+use std::fmt::Formatter;
 use std::ops::{Deref, DerefMut};
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
@@ -17,18 +20,87 @@ use std::ops::{Deref, DerefMut};
 /// allows to squash multiple consecutively inserted characters together as a single chunk of text
 /// even between transaction boundaries in order to preserve more efficient memory model.
 ///
-/// [Text] structure internally uses UTF-8 encoding and its length is described in a number of
+/// [TextRef] structure internally uses UTF-8 encoding and its length is described in a number of
 /// bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
 ///
-/// Like all Yrs shared data types, [Text] is resistant to the problem of interleaving (situation
+/// Like all Yrs shared data types, [TextRef] is resistant to the problem of interleaving (situation
 /// when characters inserted one after another may interleave with other peers concurrent inserts
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
+///
+/// [TextRef] offers a rich text editing capabilities (it's not limited to simple text operations).
+/// Actions like embedding objects, binaries (eg. images) and formatting attributes are all possible
+/// using [TextRef].
+///
+/// Keep in mind that [TextRef::get_string] method returns a raw string, stripped of formatting
+/// attributes or embedded objects. If there's a need to include them, use [TextRef::diff] method
+/// instead.
+///
+/// Another note worth reminding is that human-readable numeric indexes are not good for maintaining
+/// cursor positions in rich text documents with real-time collaborative capabilities. In such cases
+/// any concurrent update incoming and applied from the remote peer may change the order of elements
+/// in current [TextRef], invalidating numeric index. For such cases you can take advantage of fact
+/// that [TextRef] implements [IndexedSequence::sticky_index] method that returns a
+/// [permanent index](StickyIndex) position that sticks to the same place even when concurrent
+/// updates are being made.
+///
+/// # Example
+///
+/// ```rust
+/// use lib0::any::Any;
+/// use yrs::{Array, ArrayPrelim, Doc, GetString, Text, Transact};
+/// use yrs::types::Attrs;
+/// use yrs::types::text::{Diff, YChange};
+///
+/// let doc = Doc::new();
+/// let text = doc.get_or_insert_text("article");
+/// let mut txn = doc.transact_mut();
+///
+/// let bold = Attrs::from([("b".into(), true.into())]);
+/// let italic = Attrs::from([("i".into(), true.into())]);
+///
+/// text.insert(&mut txn, 0, "hello ");
+/// text.insert_with_attributes(&mut txn, 6, "world", italic.clone());
+/// text.format(&mut txn, 0, 5, bold.clone());
+///
+/// let chunks = text.diff(&txn, YChange::identity);
+/// assert_eq!(chunks, vec![
+///     Diff::new("hello".into(), Some(Box::new(bold.clone()))),
+///     Diff::new(" ".into(), None),
+///     Diff::new("world".into(), Some(Box::new(italic))),
+/// ]);
+///
+/// // remove formatting
+/// let remove_italic = Attrs::from([("i".into(), Any::Null)]);
+/// text.format(&mut txn, 6, 5, remove_italic);
+///
+/// let chunks = text.diff(&txn, YChange::identity);
+/// assert_eq!(chunks, vec![
+///     Diff::new("hello".into(), Some(Box::new(bold.clone()))),
+///     Diff::new(" world".into(), None),
+/// ]);
+///
+/// // insert binary payload eg. images
+/// let image = b"deadbeaf".to_vec();
+/// text.insert_embed(&mut txn, 1, image);
+///
+/// // insert nested shared type eg. table as ArrayRef of ArrayRefs
+/// let table = text.insert_embed(&mut txn, 5, ArrayPrelim::default());
+/// let header = table.insert(&mut txn, 0, ArrayPrelim::from(["Book title", "Author"]));
+/// let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"]));
+/// ```
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TextRef(BranchPtr);
 
 impl Text for TextRef {}
+impl IndexedSequence for TextRef {}
+
+impl Into<XmlTextRef> for TextRef {
+    fn into(self) -> XmlTextRef {
+        XmlTextRef::from(self.0)
+    }
+}
 
 impl Observable for TextRef {
     type Event = TextEvent;
@@ -51,7 +123,9 @@ impl Observable for TextRef {
 }
 
 impl GetString for TextRef {
-    /// Converts context of this text data structure into a single string value.
+    /// Converts context of this text data structure into a single string value. This method doesn't
+    /// render formatting attributes or embedded content. In order to retrieve it, use
+    /// [TextRef::diff] method.
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
         let mut start = self.as_ref().start;
         let mut s = String::new();
@@ -64,6 +138,18 @@ impl GetString for TextRef {
             start = item.right.clone();
         }
         s
+    }
+}
+
+impl TryFrom<BlockPtr> for TextRef {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Some(branch) = value.clone().as_branch() {
+            Ok(TextRef::from(branch))
+        } else {
+            Err(value)
+        }
     }
 }
 
@@ -182,11 +268,18 @@ pub trait Text: AsRef<Branch> {
     /// the end of it.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
-    fn insert_embed(&self, txn: &mut TransactionMut, index: u32, content: Any) {
+    fn insert_embed<V>(&self, txn: &mut TransactionMut, index: u32, content: V) -> V::Return
+    where
+        V: Into<EmbedPrelim<V>> + Prelim,
+    {
         let this = BranchPtr::from(self.as_ref());
         if let Some(pos) = find_position(this, txn, index) {
-            let value = crate::block::PrelimEmbed(content);
-            txn.create_item(&pos, value, None);
+            let ptr = txn.create_item(&pos, content.into(), None);
+            if let Ok(integrated) = ptr.try_into() {
+                integrated
+            } else {
+                panic!("Defect: embedded return type doesn't match.")
+            }
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -200,26 +293,33 @@ pub trait Text: AsRef<Branch> {
     /// a formatting blocks.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
-    fn insert_embed_with_attributes(
+    fn insert_embed_with_attributes<V>(
         &self,
         txn: &mut TransactionMut,
         index: u32,
-        embed: Any,
+        embed: V,
         mut attributes: Attrs,
-    ) {
+    ) -> V::Return
+    where
+        V: Into<EmbedPrelim<V>> + Prelim,
+    {
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
             pos.unset_missing(&mut attributes);
             minimize_attr_changes(&mut pos, &attributes);
             let negated_attrs = insert_attributes(this, txn, &mut pos, attributes);
 
-            let value = crate::block::PrelimEmbed(embed);
-            let item = txn.create_item(&pos, value, None);
+            let item = txn.create_item(&pos, embed.into(), None);
 
-            pos.right = Some(item);
+            pos.right = Some(item.clone());
             pos.forward();
 
             insert_negated_attributes(this, txn, &mut pos, negated_attrs);
+            if let Ok(integrated) = item.try_into() {
+                integrated
+            } else {
+                panic!("Defect: unexpected returned integrated type")
+            }
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -254,6 +354,45 @@ pub trait Text: AsRef<Branch> {
         }
     }
 
+    /// Returns an ordered sequence of formatted chunks, current [Text] corresponds of. These chunks
+    /// may contain inserted pieces of text or more complex elements like embedded binaries of
+    /// shared objects. Chunks are organized by type of inserted value and formatting attributes
+    /// wrapping it around. If formatting attributes are nested into each other, they will be split
+    /// into separate [Diff] chunks.
+    ///
+    /// `compute_ychange` callback is used to attach custom data to produced chunks.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use yrs::{Doc, Text, Transact};
+    /// use yrs::types::Attrs;
+    /// use yrs::types::text::{Diff, YChange};
+    ///
+    /// let doc = Doc::new();
+    /// let text = doc.get_or_insert_text("article");
+    /// let mut txn = doc.transact_mut();
+    ///
+    /// let bold = Attrs::from([("b".into(), true.into())]);
+    /// let italic = Attrs::from([("i".into(), true.into())]);
+    ///
+    /// text.insert_with_attributes(&mut txn, 0, "hello world", italic.clone()); // "<i>hello world</i>"
+    /// text.format(&mut txn, 6, 5, bold.clone()); // "<i>hello <b>world</b></i>"
+    /// let image = vec![0, 0, 0, 0];
+    /// text.insert_embed(&mut txn, 5, image.clone()); // insert binary after "hello"
+    ///
+    /// let italic_and_bold = Attrs::from([
+    ///   ("b".into(), true.into()),
+    ///   ("i".into(), true.into())
+    /// ]);
+    /// let chunks = text.diff(&txn, YChange::identity);
+    /// assert_eq!(chunks, vec![
+    ///     Diff::new("hello".into(), Some(Box::new(italic.clone()))),
+    ///     Diff::new(image.into(), Some(Box::new(italic.clone()))),
+    ///     Diff::new(" ".into(), Some(Box::new(italic))),
+    ///     Diff::new("world".into(), Some(Box::new(italic_and_bold))),
+    /// ]);
+    /// ```
     fn diff<T, D, F>(&self, txn: &T, compute_ychange: F) -> Vec<Diff<D>>
     where
         T: ReadTxn,
@@ -389,7 +528,7 @@ where
                     }
                     ItemContent::Type(_) | ItemContent::Embed(_) => {
                         self.pack_str();
-                        if let Some(value) = item.content.get_last() {
+                        if let Some(value) = item.content.get_first() {
                             let attrs = self.attrs_boxed();
                             self.ops.push(Diff::new(value, attrs));
                         }
@@ -555,6 +694,20 @@ fn remove(txn: &mut TransactionMut, mut pos: ItemPosition, len: u32) {
     }
 }
 
+fn is_valid_target(ptr: BlockPtr) -> bool {
+    if ptr.is_deleted() {
+        true
+    } else if let Block::Item(item) = ptr.deref() {
+        if let ItemContent::Format(_, _) = &item.content {
+            true
+        } else {
+            false
+        }
+    } else {
+        true
+    }
+}
+
 fn insert_format(
     this: BranchPtr,
     txn: &mut TransactionMut,
@@ -565,8 +718,12 @@ fn insert_format(
     minimize_attr_changes(&mut pos, &attrs);
     let mut negated_attrs = insert_attributes(this, txn, &mut pos, attrs.clone()); //TODO: remove `attrs.clone()`
     let encoding = txn.store().options.offset_kind;
+    // iterate until first non-format or null is found
+    // delete all formats with attributes[format.key] != null
+    // also check the attributes after the first non-format as we do not want to insert redundant
+    // negated attributes there
     while let Some(right) = pos.right {
-        if len <= 0 {
+        if !(len > 0 || (!negated_attrs.is_empty() && is_valid_target(right))) {
             break;
         }
 
@@ -783,10 +940,20 @@ fn clean_format_gap(
     cleanups
 }
 
+/// A representation of an uniformly-formatted chunk of rich context stored by [TextRef] or
+/// [XmlTextRef]. It contains a value (which could be a string, embedded object or another shared
+/// type) with optional formatting attributes wrapping around this chunk. It can also contain some
+/// custom data generated by caller as part of [TextRef::diff] callback.
 #[derive(Debug, PartialEq)]
 pub struct Diff<T> {
+    /// Inserted chunk of data. It can be (usually) piece of text, but possibly also embedded value
+    /// or another shared type.
     pub insert: Value,
+
+    /// Optional formatting attributes wrapping inserted chunk of data.
     pub attributes: Option<Box<Attrs>>,
+
+    /// Custom user data attached to this chunk of data.
     pub ychange: Option<T>,
 }
 
@@ -794,12 +961,31 @@ impl<T> Diff<T> {
     pub fn new(insert: Value, attributes: Option<Box<Attrs>>) -> Self {
         Self::with_change(insert, attributes, None)
     }
+
     pub fn with_change(insert: Value, attributes: Option<Box<Attrs>>, ychange: Option<T>) -> Self {
         Diff {
             insert,
             attributes,
             ychange,
         }
+    }
+}
+
+impl<T> std::fmt::Display for Diff<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{ insert: '{}'", self.insert)?;
+        if let Some(attrs) = self.attributes.as_ref() {
+            write!(f, ", attributes: {{")?;
+            let mut i = attrs.iter();
+            if let Some((k, v)) = i.next() {
+                write!(f, " {}={}", k, v)?;
+            }
+            for (k, v) in i {
+                write!(f, ", {}={}", k, v)?;
+            }
+            write!(f, " }}")?;
+        }
+        write!(f, " }}")
     }
 }
 
@@ -1059,22 +1245,38 @@ impl TextEvent {
     }
 }
 
-/// A preliminary text. It's can be used to initialize a Text, when it's about to be nested
+/// A preliminary text. It's can be used to initialize a [TextRef], when it's about to be nested
 /// into another Yrs data collection, such as [Map] or [Array].
 #[derive(Debug)]
-pub struct TextPrelim<'a>(pub &'a str);
+pub struct TextPrelim<T: Borrow<str>>(T);
 
-impl Prelim for TextPrelim<'_> {
+impl<T: Borrow<str>> TextPrelim<T> {
+    pub fn new(value: T) -> Self {
+        TextPrelim(value)
+    }
+}
+
+impl<T: Borrow<str>> Prelim for TextPrelim<T> {
+    type Return = TextRef;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = Branch::new(TYPE_REFS_TEXT, None);
         (ItemContent::Type(inner), Some(self))
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        if !self.0.is_empty() {
+        let borrowed = self.0.borrow();
+        if !borrowed.is_empty() {
             let text = TextRef::from(inner_ref);
-            text.push(txn, self.0);
+            text.push(txn, borrowed);
         }
+    }
+}
+
+impl<T: Borrow<str>> Into<EmbedPrelim<TextPrelim<T>>> for TextPrelim<T> {
+    #[inline]
+    fn into(self) -> EmbedPrelim<TextPrelim<T>> {
+        EmbedPrelim::Shared(self)
     }
 }
 
@@ -1084,9 +1286,14 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
     use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
+    use crate::types::Value;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{Doc, GetString, Observable, StateVector, Text, Transact, Update, ID};
+    use crate::{
+        ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlTextRef,
+        ID,
+    };
+    use lib0::any;
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use rand::Rng;
@@ -1426,6 +1633,58 @@ mod test {
 
         assert_eq!(a, b);
         assert_eq!(a, "H beautifuld!".to_owned());
+    }
+
+    #[test]
+    fn observer() {
+        let doc = Doc::with_client_id(1);
+        let mut txt: XmlTextRef = doc.get_or_insert_text("text").into();
+        let delta = Rc::new(RefCell::new(None));
+        let delta_c = delta.clone();
+        let sub = txt.observe(move |txn, e| {
+            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
+        });
+
+        // insert initial data to an empty YText
+        txt.insert(&mut doc.transact_mut(), 0, "abcd"); // => 'abcd'
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![Delta::Inserted("abcd".into(), None)])
+        );
+
+        // remove 2 chars from the middle
+        txt.remove_range(&mut doc.transact_mut(), 1, 2); // => 'ad'
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![Delta::Retain(1, None), Delta::Deleted(2)])
+        );
+
+        // insert new item in the middle
+        let attrs = Attrs::from([("bold".into(), true.into())]);
+        txt.insert_with_attributes(&mut doc.transact_mut(), 1, "e", attrs.clone()); // => 'a<bold>e</bold>d'
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![
+                Delta::Retain(1, None),
+                Delta::Inserted("e".into(), Some(Box::new(attrs)))
+            ])
+        );
+
+        // remove formatting
+        let attrs = Attrs::from([("bold".into(), Any::Null)]);
+        txt.format(&mut doc.transact_mut(), 1, 1, attrs.clone()); // => 'aed'
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![
+                Delta::Retain(1, None),
+                Delta::Retain(2, Some(Box::new(attrs)))
+            ])
+        );
+
+        // free the observer and make sure that callback is no longer called
+        drop(sub);
+        txt.insert(&mut doc.transact_mut(), 1, "fgh"); // => 'afghed'
+        assert_eq!(delta.borrow_mut().take(), None);
     }
 
     #[test]
@@ -1771,7 +2030,6 @@ mod test {
     }
 
     #[test]
-    #[ignore = "TODO: OctoBase ignored because it fails for some reason"]
     fn embed_with_attributes() {
         let d1 = Doc::with_client_id(1);
         let mut txt1 = d1.get_or_insert_text("text");
@@ -1784,16 +2042,15 @@ mod test {
         });
 
         let a1: Attrs = HashMap::from([("bold".into(), true.into())]);
-        let embed: Any = Any::Map(Box::new(HashMap::from([(
-            "image".into(),
-            "imageSrc.png".into(),
-        )])));
+        let embed = any!({
+            "image": "imageSrc.png"
+        });
 
         let (update_v1, update_v2) = {
             let mut txn = d1.transact_mut();
             txt1.insert_with_attributes(&mut txn, 0, "ab", a1.clone());
 
-            let a2: Attrs = HashMap::from([("width".into(), Any::BigInt(100))]);
+            let a2: Attrs = HashMap::from([("width".into(), Any::Number(100.0))]);
 
             txt1.insert_embed_with_attributes(&mut txn, 1, embed.clone(), a2.clone());
             drop(txn);
@@ -1846,7 +2103,8 @@ mod test {
         {
             let txn = &mut d3.transact_mut();
             txn.apply_update(Update::decode_v2(&update_v2).unwrap());
-            assert_eq!(txt3.diff(txn, YChange::identity), expected);
+            let actual = txt3.diff(txn, YChange::identity);
+            assert_eq!(actual, expected);
         }
     }
 
@@ -1912,10 +2170,8 @@ mod test {
             let c2 = text2.chars().count();
             let count = c1 as u32 + c2 as u32;
 
-            let _observer = text.observe(move |txn, edit| {
-                // THIS ASSERT FAILS!
-                assert_eq!(edit.delta(txn)[0], Delta::Deleted(count))
-            });
+            let _observer = text
+                .observe(move |txn, edit| assert_eq!(edit.delta(txn)[0], Delta::Deleted(count)));
 
             text.remove_range(&mut txn, 0, count);
             txn.commit();
@@ -2122,6 +2378,35 @@ mod test {
                 )
             ]
         )
+    }
+
+    #[test]
+    fn diff_with_embedded_items() {
+        let doc = Doc::new();
+        let text = doc.get_or_insert_text("article");
+        let mut txn = doc.transact_mut();
+
+        let bold = Attrs::from([("b".into(), true.into())]);
+        let italic = Attrs::from([("i".into(), true.into())]);
+
+        text.insert_with_attributes(&mut txn, 0, "hello world", italic.clone()); // "<i>hello world</i>"
+        text.format(&mut txn, 6, 5, bold.clone()); // "<i>hello <b>world</b></i>"
+        let image = vec![0, 0, 0, 0];
+        text.insert_embed(&mut txn, 5, image.clone()); // insert binary after "hello"
+        let array = text.insert_embed(&mut txn, 5, ArrayPrelim::default()); // insert array ref after "hello"
+
+        let italic_and_bold = Attrs::from([("b".into(), true.into()), ("i".into(), true.into())]);
+        let chunks = text.diff(&txn, YChange::identity);
+        assert_eq!(
+            chunks,
+            vec![
+                Diff::new("hello".into(), Some(Box::new(italic.clone()))),
+                Diff::new(Value::YArray(array), Some(Box::new(italic.clone()))),
+                Diff::new(image.into(), Some(Box::new(italic.clone()))),
+                Diff::new(" ".into(), Some(Box::new(italic))),
+                Diff::new("world".into(), Some(Box::new(italic_and_bold))),
+            ]
+        );
     }
 
     #[test]

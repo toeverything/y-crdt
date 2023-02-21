@@ -10,11 +10,17 @@ use crate::utils::OptionExt;
 use crate::*;
 use atomic_refcell::{AtomicRef, AtomicRefMut};
 use lib0::error::Error;
+use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Formatter;
+use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
 use std::rc::Rc;
 use updates::encoder::*;
 
+/// Trait defining read capabilities present in a transaction. Implemented by both lightweight
+/// [read-only](Transaction) and [read-write](TransactionMut) transactions.
 pub trait ReadTxn: Sized {
     fn store(&self) -> &Store;
 
@@ -194,6 +200,10 @@ pub trait WriteTxn: Sized {
     fn subdocs_mut(&mut self) -> &mut Subdocs;
 }
 
+/// A very lightweight read-only transaction. These transactions are guaranteed to not modify the
+/// contents of an underlying [Doc] and can be used to read it or for serialization purposes.
+/// For this reason it's allowed to have a multiple active read-only transactions, but it's
+/// not allowed to have any active [read-write transactions](TransactionMut) at the same time.
 #[derive(Debug)]
 pub struct Transaction<'doc> {
     store: AtomicRef<'doc, Store>,
@@ -215,6 +225,18 @@ impl<'doc> ReadTxn for Transaction<'doc> {
     }
 }
 
+/// Read-write transaction. It can be used to modify an underlying state of the corresponding [Doc].
+/// Read-write transactions require an exclusive access to document store - only one such
+/// transaction can be present per [Doc] at the same time (read-only [Transaction]s are not allowed
+/// to coexists at the same time as well).
+///
+/// This transaction type stores the information about all of the changes performed in its scope.
+/// These will be used during [TransactionMut::commit] call to optimize metadata of incoming updates,
+/// triggering necessary event callbacks etc. For performance reasons it's preferred to batch as
+/// many updates as possible using the same transaction.
+///
+/// In Yrs transactions are always auto-committing all of their changes when dropped. Rollbacks are
+/// not supported (if some operations needs to be undone, this can be achieved using [UndoManager])
 pub struct TransactionMut<'doc> {
     pub(crate) store: AtomicRefMut<'doc, Store>,
     /// State vector of a current transaction at the moment of its creation.
@@ -230,8 +252,10 @@ pub struct TransactionMut<'doc> {
     pub(crate) prev_moved: HashMap<BlockPtr, BlockPtr>,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
-    changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
+    pub(crate) changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
+    pub(crate) changed_parent_types: Vec<BranchPtr>,
     pub(crate) subdocs: Option<Box<Subdocs>>,
+    pub(crate) origin: Option<Origin>,
     committed: bool,
 }
 
@@ -260,15 +284,17 @@ impl<'doc> Drop for TransactionMut<'doc> {
 }
 
 impl<'doc> TransactionMut<'doc> {
-    pub(crate) fn new(store: AtomicRefMut<'doc, Store>) -> Self {
+    pub(crate) fn new(store: AtomicRefMut<'doc, Store>, origin: Option<Origin>) -> Self {
         let begin_timestamp = store.blocks.get_state_vector();
         TransactionMut {
             store,
+            origin,
             before_state: begin_timestamp,
-            merge_blocks: Vec::new(),
+            merge_blocks: Vec::default(),
             delete_set: DeleteSet::new(),
             after_state: StateVector::default(),
-            changed: HashMap::new(),
+            changed: HashMap::default(),
+            changed_parent_types: Vec::default(),
             prev_moved: HashMap::default(),
             subdocs: None,
             committed: false,
@@ -280,14 +306,26 @@ impl<'doc> TransactionMut<'doc> {
         &self.before_state
     }
 
-    /// Current document state vector which includes changes made by this transaction.
+    /// State vector of the transaction after [Transaction::commit] has been called.
     pub fn after_state(&self) -> &StateVector {
-        &self.before_state
+        &self.after_state
     }
 
     /// Data about deletions performed in the scope of current transaction.
     pub fn delete_set(&self) -> &DeleteSet {
         &self.delete_set
+    }
+
+    /// Returns origin of the transaction if any was defined. Read-write transactions can get an
+    /// origin assigned via [Transact::try_transact_mut_with]/[Transact::transact_mut_with] methods.
+    pub fn origin(&self) -> Option<&Origin> {
+        self.origin.as_ref()
+    }
+
+    /// Returns a list of root level types changed in a scope of the current transaction. This
+    /// list is not filled right away, but as a part of [TransactionMut::commit] process.
+    pub fn changed_parent_types(&self) -> &[BranchPtr] {
+        &self.changed_parent_types
     }
 
     #[inline]
@@ -510,7 +548,16 @@ impl<'doc> TransactionMut<'doc> {
         result
     }
 
-    /// Applies a deserialized update contents into a document owning current transaction.
+    /// Applies a deserialized [Update] contents into a document owning current transaction. Update
+    /// payload can be generated by methods such as [TransactionMut::encode_diff] or passed to
+    /// [Doc::observe_update_v1]/[Doc::observe_update_v2] callbacks. Updates are allowed to contain
+    /// duplicate blocks (already presen in current document store) - these will be ignored.
+    ///
+    /// # Pending updates
+    ///
+    /// Remote update integration requires that all to-be-integrated blocks must have their direct
+    /// predecessors already in place. Out of order updates from the same peer will be stashed
+    /// internally and their integration will be postponed until missing blocks arrive first.
     pub fn apply_update(&mut self, update: Update) {
         let (remaining, remaining_ds) = update.integrate(self);
         let mut retry = false;
@@ -616,8 +663,9 @@ impl<'doc> TransactionMut<'doc> {
     }
 
     /// Commits current transaction. This step involves cleaning up and optimizing changes performed
-    /// during lifetime of a transaction. Such changes include squashing delete sets data
-    /// or squashing blocks that have been appended one after another to preserve memory.
+    /// during lifetime of a transaction. Such changes include squashing delete sets data,
+    /// squashing blocks that have been appended one after another to preserve memory and triggering
+    /// events.
     ///
     /// This step is performed automatically when a transaction is about to be dropped (its life
     /// scope comes to an end).
@@ -643,6 +691,7 @@ impl<'doc> TransactionMut<'doc> {
 
                         let mut current = *branch;
                         loop {
+                            self.changed_parent_types.push(current);
                             if current.deep_observers.is_some() {
                                 let entries = changed_parents.entry(current).or_default();
                                 entries.push(event_cache.len() - 1);
@@ -680,6 +729,11 @@ impl<'doc> TransactionMut<'doc> {
                 let events = Events::new(&mut unsorted);
                 branch.trigger_deep(self, &events);
             }
+        }
+
+        if let Some(events) = self.store.events.take() {
+            events.emit_after_transaction(self);
+            self.store.events = Some(events);
         }
 
         // 4. try GC delete set
@@ -831,55 +885,14 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
 
-        for (client, range) in snapshot.delete_set.iter() {
-            if let Some(mut list) = blocks.get(client) {
-                for r in range.iter() {
-                    if let Some(pivot) = list.find_pivot(r.start) {
-                        let block = list.get(pivot);
-                        let clock = block.id().clock;
-                        if clock < r.start {
-                            if let Some(ptr) = blocks.split_block_inner(block, r.start - clock) {
-                                if let Block::Item(item) = block.deref() {
-                                    if item.moved.is_some() {
-                                        if let Some(&prev_moved) = self.prev_moved.get(&block) {
-                                            self.prev_moved.insert(ptr, prev_moved);
-                                        }
-                                    }
-                                }
-                                merge_blocks.push(*ptr.id());
-                            }
-                            list = blocks.get(client).unwrap();
-                        }
-                    }
-
-                    if let Some(pivot) = list.find_pivot(r.end) {
-                        let block = list.get(pivot);
-                        let block_id = block.id();
-                        let block_len = block.len();
-                        if block_id.clock + block_len > r.end {
-                            if let Some(ptr) =
-                                blocks.split_block_inner(block, block_id.clock + block_len - r.end)
-                            {
-                                if let Block::Item(item) = block.deref() {
-                                    if item.moved.is_some() {
-                                        if let Some(&prev_moved) = self.prev_moved.get(&block) {
-                                            self.prev_moved.insert(ptr, prev_moved);
-                                        }
-                                    }
-                                }
-                                merge_blocks.push(*ptr.id());
-                            }
-                            list = blocks.get(client).unwrap();
-                        }
-                    }
-                }
-            }
-        }
-
         self.merge_blocks.append(&mut merge_blocks);
+        for _ in snapshot.delete_set.deleted_blocks(self) {
+            // do nothing just split the blocks by delete set
+        }
     }
 }
 
+/// Iterator struct used to traverse over all of the root level types defined in a corresponding [Doc].
 pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Rc<str>, Box<Branch>>);
 
 impl<'doc> Iterator for RootRefs<'doc> {
@@ -899,3 +912,76 @@ pub struct Subdocs {
     pub(crate) removed: HashMap<DocAddr, Doc>,
     pub(crate) loaded: HashMap<DocAddr, Doc>,
 }
+
+/// A binary marker that can be assigned to a read-write transaction upon creation via
+/// [Transact::try_transact_mut_with]/[Transact::transact_mut_with]. It can be used to classify
+/// transaction updates within a specific context, which exists for the duration of a transaction
+/// (it's **not persisted** in the document store itself), i.e. *you can use unique document client
+/// identifiers to differentiate updates incoming from remote nodes from those performed locally*.
+#[repr(transparent)]
+#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub struct Origin(SmallVec<[u8; std::mem::size_of::<usize>()]>);
+
+impl AsRef<[u8]> for Origin {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
+impl<'a, T> From<Pin<&'a T>> for Origin {
+    fn from(p: Pin<&T>) -> Self {
+        let ptr = Pin::get_ref(p) as *const T as usize;
+        Origin(SmallVec::from_const(ptr.to_be_bytes()))
+    }
+}
+
+impl<'a> From<&'a [u8]> for Origin {
+    fn from(slice: &'a [u8]) -> Self {
+        Origin(SmallVec::from_slice(slice))
+    }
+}
+
+impl<'a> From<&'a str> for Origin {
+    fn from(v: &'a str) -> Self {
+        Origin(SmallVec::from_slice(v.as_ref()))
+    }
+}
+
+impl std::fmt::Debug for Origin {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for Origin {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Origin(")?;
+        for b in self.0.iter() {
+            write!(f, "{:02x?}", b)?;
+        }
+        write!(f, ")")
+    }
+}
+
+macro_rules! impl_origin {
+    ($t:ty) => {
+        impl From<$t> for Origin {
+            fn from(v: $t) -> Origin {
+                Origin(SmallVec::from_slice(&v.to_be_bytes()))
+            }
+        }
+    };
+}
+
+impl_origin!(u8);
+impl_origin!(u16);
+impl_origin!(u32);
+impl_origin!(u64);
+impl_origin!(u128);
+impl_origin!(usize);
+impl_origin!(i8);
+impl_origin!(i16);
+impl_origin!(i32);
+impl_origin!(i64);
+impl_origin!(i128);
+impl_origin!(isize);

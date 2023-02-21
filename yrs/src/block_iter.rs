@@ -1,10 +1,12 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim};
-use crate::moving::{Move, RelativePosition};
+use crate::moving::{Move, StickyIndex};
 use crate::transaction::{ReadTxn, TransactionMut};
 use crate::types::{BranchPtr, TypePtr, Value};
-use crate::ID;
+use crate::{Assoc, ID};
 use std::ops::DerefMut;
 
+/// Struct used for iterating over the sequence of item's values with respect to a potential
+/// [Move] markers that may change their order.
 #[derive(Debug, Clone)]
 pub(crate) struct BlockIter {
     branch: BranchPtr,
@@ -280,7 +282,9 @@ impl BlockIter {
 
             let moved_item = stack_item.moved_to.as_item().unwrap();
             if let ItemContent::Move(m) = &moved_item.content {
-                if m.start.assoc && (m.start.within_range(start)) || (m.end.within_range(end)) {
+                if m.start.assoc == Assoc::Before && (m.start.within_range(start))
+                    || (m.end.within_range(end))
+                {
                     let (s, e) = m.get_moved_coords(txn);
                     start = s;
                     end = e;
@@ -443,7 +447,7 @@ impl BlockIter {
         }
     }
 
-    pub fn insert_contents<V: Prelim>(&mut self, txn: &mut TransactionMut, value: V) {
+    pub fn insert_contents<V: Prelim>(&mut self, txn: &mut TransactionMut, value: V) -> BlockPtr {
         self.reduce_moves(txn);
         self.split_rel(txn);
         let id = {
@@ -488,14 +492,11 @@ impl BlockIter {
             self.next_item = left;
             self.reached_end = true;
         }
+
+        block_ptr
     }
 
-    pub fn insert_move(
-        &mut self,
-        txn: &mut TransactionMut,
-        start: RelativePosition,
-        end: RelativePosition,
-    ) {
+    pub fn insert_move(&mut self, txn: &mut TransactionMut, start: StickyIndex, end: StickyIndex) {
         self.insert_contents(txn, Move::new(start, end, -1));
     }
 
