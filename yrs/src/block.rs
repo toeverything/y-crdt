@@ -1283,7 +1283,7 @@ pub struct Item {
     pub(crate) right_origin: Option<ID>,
 
     /// A user data stored inside of a current item.
-    pub(crate) content: ItemContent,
+    pub content: ItemContent,
 
     /// Pointer to a parent collection containing current item.
     pub parent: TypePtr,
