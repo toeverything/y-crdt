@@ -1286,7 +1286,7 @@ pub struct Item {
     pub(crate) content: ItemContent,
 
     /// Pointer to a parent collection containing current item.
-    pub(crate) parent: TypePtr,
+    pub parent: TypePtr,
 
     /// Used by [UndoManager] to track another block that reverts the effects of deletion of current
     /// item.
@@ -1294,7 +1294,7 @@ pub struct Item {
 
     /// Used only when current item is used by map-like types. In such case this item works as a
     /// key-value entry of a map, and this field contains a key used by map.
-    pub(crate) parent_sub: Option<Rc<str>>,
+    pub parent_sub: Option<Rc<str>>,
 
     /// This property is reused by the moved prop. In this case this property refers to an Item.
     pub(crate) moved: Option<BlockPtr>,
