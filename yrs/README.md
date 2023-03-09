@@ -7,8 +7,8 @@ This enables to provide a shared document editing experience on a client devices
 
 This library contains Rust API, that's used further on by other projects in this repository:
 
-- [C foreign function interface](../yffi/README.md) to provide native interop that could be used by other host languages like Swift or Java.
-- [ywasm](../ywasm/README.md) which targets Web Assembly bindings and can be used directly from JavaScript.
+- [C foreign function interface](https://github.com/y-crdt/y-crdt/tree/main/yffi) to provide native interop that could be used by other host languages like Swift or Java.
+- [ywasm](https://github.com/y-crdt/y-crdt/tree/main/ywasm) which targets Web Assembly bindings and can be used directly from JavaScript.
 
 ## Example
 
@@ -30,7 +30,7 @@ fn main() {
     // simulate update with remote peer
     let remote_doc = Doc::new();
     let remote_text = remote_doc.get_or_insert_text("name");
-    let mut remote_txn = remote_doc.transact();
+    let mut remote_txn = remote_doc.transact_mut();
 
     // in order to exchange data with other documents 
     // we first need to create a state vector
@@ -46,12 +46,11 @@ fn main() {
     remote_txn.apply_update(update);
 
     // display raw text (no attributes)
-    println!("{}", remote_text.to_string(&remote_txn));
+    println!("{}", remote_text.get_string(&remote_txn));
   
     // create sequence of text chunks with optional format attributes
     let diff = remote_text.diff(&remote_txn, YChange::identity);
 }
-
 ```
 
 ## [Documentation](https://docs.rs/yrs/)
