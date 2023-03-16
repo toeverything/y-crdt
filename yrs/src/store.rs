@@ -90,7 +90,7 @@ impl Store {
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
     /// no such type could be found or was ever defined.
-    pub(crate) fn get_or_create_type<K: Into<Rc<str>>>(
+    pub fn get_or_create_type<K: Into<Rc<str>>>(
         &mut self,
         key: K,
         node_name: Option<Rc<str>>,
