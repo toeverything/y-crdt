@@ -73,6 +73,10 @@ impl Store {
         self.parent.is_some()
     }
 
+    pub fn root_keys(&self) -> Vec<String> {
+        self.types.keys().map(|k| k.to_string()).collect()
+    }
+
     /// Get the latest clock sequence number observed and integrated into a current store client.
     /// This is exclusive value meaning it describes a clock value of the beginning of the next
     /// block that's about to be inserted. You cannot use that clock value to find any existing
@@ -387,6 +391,11 @@ impl std::fmt::Display for Store {
 #[repr(transparent)]
 #[derive(Debug, Clone)]
 pub struct WeakStoreRef(pub(crate) Weak<AtomicRefCell<Store>>);
+
+/// Impl'd for OctoBase
+unsafe impl Send for StoreRef {}
+/// Impl'd for OctoBase
+unsafe impl Sync for StoreRef {}
 
 impl PartialEq for WeakStoreRef {
     fn eq(&self, other: &Self) -> bool {

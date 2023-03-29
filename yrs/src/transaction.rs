@@ -215,6 +215,9 @@ impl<'doc> Transaction<'doc> {
     }
 }
 
+/// Impl'd for OctoBase
+unsafe impl Send for Transaction<'_> {}
+
 impl<'doc> ReadTxn for Transaction<'doc> {
     #[inline]
     fn store(&self) -> &Store {
