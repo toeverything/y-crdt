@@ -99,6 +99,20 @@ impl Update {
         self.blocks.is_empty() && self.delete_set.is_empty()
     }
 
+    /// Added for OctoBase history/raw.rs
+    pub fn as_items<'a>(&'a self) -> Vec<&'a Item> {
+        self.blocks
+            .blocks()
+            .filter_map(|b| {
+                if let BlockCarrier::Block(b) = b {
+                    b.as_item()
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Returns a state vector representing an upper bound of client clocks included by blocks
     /// stored in current update.
     pub fn state_vector(&self) -> StateVector {

@@ -1257,8 +1257,9 @@ impl Into<u8> for ItemFlags {
 /// together as a part of indexed sequences or maps.
 #[derive(PartialEq)]
 pub struct Item {
+    /// Pub'd for OctoBase history/raw.rs
     /// Unique identifier of the first update described by the current [Item].
-    pub(crate) id: ID,
+    pub id: ID,
 
     /// A number of splittable updates within a current [Item].
     pub(crate) len: u32,
@@ -1283,10 +1284,10 @@ pub struct Item {
     pub(crate) right_origin: Option<ID>,
 
     /// A user data stored inside of a current item.
-    pub(crate) content: ItemContent,
+    pub content: ItemContent,
 
     /// Pointer to a parent collection containing current item.
-    pub(crate) parent: TypePtr,
+    pub parent: TypePtr,
 
     /// Used by [UndoManager] to track another block that reverts the effects of deletion of current
     /// item.
@@ -1294,7 +1295,7 @@ pub struct Item {
 
     /// Used only when current item is used by map-like types. In such case this item works as a
     /// key-value entry of a map, and this field contains a key used by map.
-    pub(crate) parent_sub: Option<Rc<str>>,
+    pub parent_sub: Option<Rc<str>>,
 
     /// This property is reused by the moved prop. In this case this property refers to an Item.
     pub(crate) moved: Option<BlockPtr>,
@@ -1413,6 +1414,22 @@ impl Item {
             branch.item = Some(item_ptr);
         }
         item
+    }
+
+    /// Added for OctoBase history/raw.rs
+    pub fn resolve_parent(&self) -> Option<(TypePtr, Option<Rc<str>>)> {
+        if let Some(Block::Item(item)) = self.left.as_deref() {
+            if let TypePtr::Unknown = item.parent {
+                if let Some(Block::Item(item)) = item.right.as_deref() {
+                    return Some((item.parent.clone(), item.parent_sub.clone()));
+                }
+            } else {
+                return Some((item.parent.clone(), item.parent_sub.clone()));
+            }
+        } else if let Some(Block::Item(item)) = self.right.as_deref() {
+            return Some((item.parent.clone(), item.parent_sub.clone()));
+        }
+        None
     }
 
     /// Checks if provided `id` fits inside of updates defined within bounds of current [Item].

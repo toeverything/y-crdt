@@ -322,6 +322,11 @@ impl Branch {
         })
     }
 
+    /// Added for OctoBase history/raw.rs
+    pub fn item_id(&self) -> Option<ID> {
+        self.item.map(|i| i.id().clone())
+    }
+
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
     pub fn type_ref(&self) -> TypeRefs {
         self.type_ref & 0b1111
@@ -987,8 +992,10 @@ impl<'a, T: ReadTxn> Iterator for Iter<'a, T> {
 }
 
 /// Type pointer - used to localize a complex [Branch] node within a scope of a document store.
+///
+/// Note: pub'd for OctoBase history/raw.rs
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum TypePtr {
+pub enum TypePtr {
     /// Temporary value - used only when block is deserialized right away, but had not been
     /// integrated into block store yet. As part of block integration process, items are
     /// repaired and their fields (including parent) are being rewired.
