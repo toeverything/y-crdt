@@ -170,7 +170,7 @@ where
                 for op in ops.iter() {
                     let mut txn = doc.transact_mut();
                     match op {
-                        TextOp::Insert(idx, txt) => text.insert(&mut txn, *idx, txt),
+                        TextOp::Insert(idx, txt) => text.insert(&mut txn, *idx, txt).unwrap(),
                         TextOp::Delete(idx, len) => text.remove_range(&mut txn, *idx, *len),
                     }
                 }
@@ -200,9 +200,11 @@ where
                     let mut txn = doc.transact_mut();
                     match op {
                         ArrayOp::Insert(idx, values) => {
-                            array.insert_range(&mut txn, *idx, values.clone())
+                            array.insert_range(&mut txn, *idx, values.clone()).unwrap()
                         }
-                        ArrayOp::Delete(idx, len) => array.remove_range(&mut txn, *idx, *len),
+                        ArrayOp::Delete(idx, len) => {
+                            array.remove_range(&mut txn, *idx, *len).unwrap()
+                        }
                     }
                 }
             });
@@ -228,7 +230,7 @@ where
 
     fn apply(txn: &mut TransactionMut, txt: &TextRef, op: &TextOp) {
         match op {
-            TextOp::Insert(idx, content) => txt.insert(txn, *idx, content),
+            TextOp::Insert(idx, content) => txt.insert(txn, *idx, content).unwrap(),
             TextOp::Delete(idx, len) => txt.remove_range(txn, *idx, *len),
         }
     }
@@ -363,7 +365,7 @@ where
 }
 
 fn b3_1(map: &MapRef, txn: &mut TransactionMut, i: usize) {
-    map.insert(txn, "v", i as u32);
+    map.insert(txn, "v", i as u32).unwrap();
 }
 
 fn b3_2(map: &MapRef, txn: &mut TransactionMut, i: usize) {
@@ -371,7 +373,7 @@ fn b3_2(map: &MapRef, txn: &mut TransactionMut, i: usize) {
     o.insert("name".to_string(), i.to_string());
     o.insert("address".to_string(), "here".to_string());
 
-    map.insert(txn, "v", o);
+    map.insert(txn, "v", o).unwrap();
 }
 
 fn b3_3(map: &MapRef, txn: &mut TransactionMut, i: usize) {
@@ -379,7 +381,7 @@ fn b3_3(map: &MapRef, txn: &mut TransactionMut, i: usize) {
     for _ in 0..SQRT_N {
         str.push_str(i.to_string().as_str());
     }
-    map.insert(txn, "v", str);
+    map.insert(txn, "v", str).unwrap();
 }
 
 fn b3_4(c: &mut Criterion, name: &str) {
@@ -390,7 +392,7 @@ fn b3_4(c: &mut Criterion, name: &str) {
             let array = doc.get_or_insert_array("array");
             let update = {
                 let mut txn = doc.transact_mut();
-                array.insert(&mut txn, 0, i.to_string());
+                array.insert(&mut txn, 0, i.to_string()).unwrap();
                 txn.encode_update_v1().unwrap()
             };
             (doc, update)
@@ -422,7 +424,7 @@ fn b4_1(c: &mut Criterion, name: &str) {
                 for i in input {
                     let mut txn = doc.transact_mut();
                     match i {
-                        TextOp::Insert(idx, chunk) => txt.insert(&mut txn, *idx, chunk),
+                        TextOp::Insert(idx, chunk) => txt.insert(&mut txn, *idx, chunk).unwrap(),
                         TextOp::Delete(idx, len) => txt.remove_range(&mut txn, *idx, *len),
                     }
                 }
