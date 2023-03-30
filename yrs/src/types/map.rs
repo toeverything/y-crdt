@@ -6,6 +6,7 @@ use crate::types::{
 };
 use crate::*;
 use lib0::any::Any;
+use lib0::error::Error;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
@@ -35,11 +36,11 @@ use std::rc::Rc;
 /// let mut txn = doc.transact_mut();
 ///
 /// // insert value
-/// map.insert(&mut txn, "key1", "value1");
+/// map.insert(&mut txn, "key1", "value1").unwrap();
 ///
 /// // insert nested shared type
-/// let nested = map.insert(&mut txn, "key2", MapPrelim::from([("inner", "value2")]));
-/// nested.insert(&mut txn, "inner2", 100);
+/// let nested = map.insert(&mut txn, "key2", MapPrelim::from([("inner", "value2")])).unwrap();
+/// nested.insert(&mut txn, "inner2", 100).unwrap();
 ///
 /// assert_eq!(map.to_json(&txn), any!({
 ///   "key1": "value1",
@@ -156,7 +157,7 @@ pub trait Map: AsRef<Branch> {
     }
 
     /// Inserts a new `value` under given `key` into current map. Returns an integrated value.
-    fn insert<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> V::Return
+    fn insert<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> Result<V::Return, Error>
     where
         K: Into<Rc<str>>,
         V: Prelim,
@@ -174,11 +175,11 @@ pub trait Map: AsRef<Branch> {
             }
         };
 
-        let ptr = txn.create_item(&pos, value, Some(key));
+        let ptr = txn.create_item(&pos, value, Some(key)).unwrap();
         if let Ok(integrated) = ptr.try_into() {
-            integrated
+            Ok(integrated)
         } else {
-            panic!("Defect: unexpected integrated type")
+            Err(Error::Other("Defect: unexpected integrated type".into()))
         }
     }
 
@@ -358,11 +359,13 @@ impl<T: Prelim> Prelim for MapPrelim<T> {
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) -> Result<(), Error> {
         let map = MapRef::from(inner_ref);
         for (key, value) in self.0 {
-            map.insert(txn, key, value);
+            map.insert(txn, key, value).unwrap();
         }
+
+        Ok(())
     }
 }
 

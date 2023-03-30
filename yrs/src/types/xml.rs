@@ -11,6 +11,7 @@ use crate::{
     ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, StickyIndex, Text, TextRef, ID,
 };
 use lib0::any::Any;
+use lib0::error::Error;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
@@ -272,11 +273,13 @@ where
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) -> Result<(), Error> {
         let xml = XmlElementRef::from(inner_ref);
         for value in self.1 {
-            xml.push_back(txn, value);
+            xml.push_back(txn, value)?;
         }
+
+        Ok(())
     }
 }
 
@@ -352,12 +355,12 @@ where
 ///
 /// // insert binary payload eg. images
 /// let image = b"deadbeaf".to_vec();
-/// text.insert_embed(&mut txn, 1, image);
+/// text.insert_embed(&mut txn, 1, image).unwrap();
 ///
 /// // insert nested shared type eg. table as ArrayRef of ArrayRefs
-/// let table = text.insert_embed(&mut txn, 5, ArrayPrelim::default());
-/// let header = table.insert(&mut txn, 0, ArrayPrelim::from(["Book title", "Author"]));
-/// let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"]));
+/// let table = text.insert_embed(&mut txn, 5, ArrayPrelim::default()).unwrap();
+/// let header = table.insert(&mut txn, 0, ArrayPrelim::from(["Book title", "Author"])).unwrap();
+/// let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"])).unwrap();
 /// ```
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -483,12 +486,14 @@ impl<T: Borrow<str>> Prelim for XmlTextPrelim<T> {
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) -> Result<(), Error> {
         let s = self.0.borrow();
         if !s.is_empty() {
             let text = XmlTextRef::from(inner_ref);
-            text.push(txn, s);
+            text.push(txn, s)?;
         }
+
+        Ok(())
     }
 }
 
@@ -624,11 +629,13 @@ where
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) -> Result<(), Error> {
         let xml = XmlFragmentRef::from(inner_ref);
         for value in self.0 {
-            xml.push_back(txn, value);
+            xml.push_back(txn, value)?;
         }
+
+        Ok(())
     }
 }
 
@@ -697,7 +704,12 @@ pub trait Xml: AsRef<Branch> {
     }
 
     /// Inserts an attribute entry into current XML element.
-    fn insert_attribute<K, V>(&self, txn: &mut TransactionMut, attr_name: K, attr_value: V)
+    fn insert_attribute<K, V>(
+        &self,
+        txn: &mut TransactionMut,
+        attr_name: K,
+        attr_value: V,
+    ) -> Result<(), Error>
     where
         K: Into<Rc<str>>,
         V: AsRef<str>,
@@ -716,7 +728,8 @@ pub trait Xml: AsRef<Branch> {
             }
         };
 
-        txn.create_item(&pos, value, Some(key));
+        txn.create_item(&pos, value, Some(key))?;
+        Ok(())
     }
 
     /// Returns a value of an attribute given its `attr_name`. Returns `None` if no such attribute
@@ -760,20 +773,27 @@ pub trait XmlFragment: AsRef<Branch> {
     /// that value at the end of it.
     ///
     /// Using `index` value that's higher than current array length results in panic.
-    fn insert<V>(&self, txn: &mut TransactionMut, index: u32, xml_node: V) -> V::Return
+    fn insert<V>(
+        &self,
+        txn: &mut TransactionMut,
+        index: u32,
+        xml_node: V,
+    ) -> Result<V::Return, Error>
     where
         V: XmlPrelim,
     {
-        let ptr = self.as_ref().insert_at(txn, index, xml_node);
+        let ptr = self.as_ref().insert_at(txn, index, xml_node)?;
         if let Ok(integrated) = V::Return::try_from(ptr) {
-            integrated
+            Ok(integrated)
         } else {
-            panic!("Defect: inserted XML element returned primitive value block")
+            Err(Error::Other(
+                "Defect: inserted XML element returned primitive value block".into(),
+            ))
         }
     }
 
     /// Inserts given `value` at the end of the current array.
-    fn push_back<V>(&self, txn: &mut TransactionMut, xml_node: V) -> V::Return
+    fn push_back<V>(&self, txn: &mut TransactionMut, xml_node: V) -> Result<V::Return, Error>
     where
         V: XmlPrelim,
     {
@@ -782,7 +802,7 @@ pub trait XmlFragment: AsRef<Branch> {
     }
 
     /// Inserts given `value` at the beginning of the current array.
-    fn push_front<V>(&self, txn: &mut TransactionMut, xml_node: V) -> V::Return
+    fn push_front<V>(&self, txn: &mut TransactionMut, xml_node: V) -> Result<V::Return, Error>
     where
         V: XmlPrelim,
     {
@@ -790,7 +810,7 @@ pub trait XmlFragment: AsRef<Branch> {
     }
 
     /// Removes a single element at provided `index`.
-    fn remove(&self, txn: &mut TransactionMut, index: u32) {
+    fn remove(&self, txn: &mut TransactionMut, index: u32) -> Result<(), Error> {
         self.remove_range(txn, index, 1)
     }
 
@@ -798,12 +818,15 @@ pub trait XmlFragment: AsRef<Branch> {
     /// a particular number described by `len` has been deleted. This method panics in case when
     /// not all expected elements were removed (due to insufficient number of elements in an array)
     /// or `index` is outside of the bounds of an array.
-    fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
+    fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) -> Result<(), Error> {
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
             walker.delete(txn, len)
         } else {
-            panic!("Index {} is outside of the range of an array", index);
+            Err(Error::Other(format!(
+                "Index {} is outside of the range of an array",
+                index
+            )))
         }
     }
 
@@ -837,11 +860,11 @@ pub trait XmlFragment: AsRef<Branch> {
     /// let doc = Doc::new();
     /// let mut html = doc.get_or_insert_xml_fragment("div");
     /// let mut txn = doc.transact_mut();
-    /// let p = html.push_back(&mut txn, XmlElementPrelim::empty("p"));
-    /// let txt = p.push_back(&mut txn, XmlTextPrelim::new("Hello "));
-    /// let b = p.push_back(&mut txn, XmlElementPrelim::empty("b"));
-    /// let txt = b.push_back(&mut txn, XmlTextPrelim::new("world"));
-    /// let txt = html.push_back(&mut txn, XmlTextPrelim::new("again"));
+    /// let p = html.push_back(&mut txn, XmlElementPrelim::empty("p")).unwrap();
+    /// let txt = p.push_back(&mut txn, XmlTextPrelim::new("Hello ")).unwrap();
+    /// let b = p.push_back(&mut txn, XmlElementPrelim::empty("b")).unwrap();
+    /// let txt = b.push_back(&mut txn, XmlTextPrelim::new("world")).unwrap();
+    /// let txt = html.push_back(&mut txn, XmlTextPrelim::new("again")).unwrap();
     ///
     /// let mut result = Vec::new();
     /// for node in html.successors(&txn) {

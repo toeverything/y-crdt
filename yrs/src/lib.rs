@@ -129,12 +129,12 @@
 //!
 //! // insert binary payload eg. images
 //! let image = b"deadbeaf".to_vec();
-//! xml.insert_embed(&mut txn, 1, image);
+//! xml.insert_embed(&mut txn, 1, image).unwrap();
 //!
 //! // insert nested shared type eg. table as ArrayRef of ArrayRefs
-//! let table = xml.insert_embed(&mut txn, 5, ArrayPrelim::default());
-//! let header = table.insert(&mut txn, 0, ArrayPrelim::from(["Book title", "Author"]));
-//! let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"]));
+//! let table = xml.insert_embed(&mut txn, 5, ArrayPrelim::default()).unwrap();
+//! let header = table.insert(&mut txn, 0, ArrayPrelim::from(["Book title", "Author"])).unwrap();
+//! let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"])).unwrap();
 //! ```
 //!
 //! Keep in mind that this kind of special content may not be displayed using standard methods

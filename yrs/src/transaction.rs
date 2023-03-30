@@ -627,7 +627,7 @@ impl<'doc> TransactionMut<'doc> {
         pos: &block::ItemPosition,
         value: T,
         parent_sub: Option<Rc<str>>,
-    ) -> BlockPtr {
+    ) -> Result<BlockPtr, Error> {
         let (left, right, origin, id) = {
             let store = self.store_mut();
             let left = pos.left;
@@ -666,10 +666,10 @@ impl<'doc> TransactionMut<'doc> {
         local_block_list.push(block);
 
         if let Some(remainder) = remainder {
-            remainder.integrate(self, inner_ref.unwrap().into())
+            remainder.integrate(self, inner_ref.unwrap().into())?;
         }
 
-        block_ptr
+        Ok(block_ptr)
     }
 
     /// Commits current transaction. This step involves cleaning up and optimizing changes performed

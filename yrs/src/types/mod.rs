@@ -4,6 +4,7 @@ pub mod text;
 pub mod xml;
 
 use crate::*;
+use lib0::error::Error;
 pub use map::Map;
 pub use map::MapRef;
 use std::borrow::Borrow;
@@ -527,7 +528,7 @@ impl Branch {
         txn: &mut TransactionMut,
         index: u32,
         value: V,
-    ) -> BlockPtr {
+    ) -> Result<BlockPtr, Error> {
         let (start, parent) = {
             if index <= self.len() {
                 (self.start, BranchPtr::from(self))

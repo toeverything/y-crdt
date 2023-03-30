@@ -8,6 +8,7 @@ use crate::types::{
 };
 use crate::{Assoc, IndexedSequence, Observable, ReadTxn, ID};
 use lib0::any::Any;
+use lib0::error::Error;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
@@ -47,13 +48,13 @@ use std::sync::Arc;
 /// let mut txn = doc.transact_mut();
 ///
 /// // insert single scalar value
-/// array.insert(&mut txn, 0, "value");
-/// array.remove_range(&mut txn, 0, 1);
+/// array.insert(&mut txn, 0, "value").unwrap();
+/// array.remove_range(&mut txn, 0, 1).unwrap();
 ///
 /// assert_eq!(array.len(&txn), 0);
 ///
 /// // insert multiple values at once
-/// array.insert_range(&mut txn, 0, ["a", "b", "c"]);
+/// array.insert_range(&mut txn, 0, ["a", "b", "c"]).unwrap();
 /// assert_eq!(array.len(&txn), 3);
 ///
 /// // get value
@@ -61,7 +62,7 @@ use std::sync::Arc;
 /// assert_eq!(value, Some("b".into()));
 ///
 /// // insert nested shared types
-/// let map = array.insert(&mut txn, 1, MapPrelim::from([("key1", "value1")]));
+/// let map = array.insert(&mut txn, 1, MapPrelim::from([("key1", "value1")])).unwrap();
 /// map.insert(&mut txn, "key2", "value2");
 ///
 /// assert_eq!(array.to_json(&txn), any!([
@@ -155,20 +156,23 @@ pub trait Array: AsRef<Branch> {
     /// # Panics
     ///
     /// This method will panic if provided `index` is greater than the current length of an [ArrayRef].
-    fn insert<V>(&self, txn: &mut TransactionMut, index: u32, value: V) -> V::Return
+    fn insert<V>(&self, txn: &mut TransactionMut, index: u32, value: V) -> Result<V::Return, Error>
     where
         V: Prelim,
     {
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
-            let ptr = walker.insert_contents(txn, value);
+            let ptr = walker.insert_contents(txn, value)?;
             if let Ok(integrated) = ptr.try_into() {
-                integrated
+                Ok(integrated)
             } else {
-                panic!("Defect: unexpected integrated type")
+                Err(Error::Other("Defect: unexpected integrated type".into()))
             }
         } else {
-            panic!("Index {} is outside of the range of an array", index);
+            Err(Error::Other(format!(
+                "Index {} is outside of the range of an array",
+                index
+            )))
         }
     }
 
@@ -179,18 +183,24 @@ pub trait Array: AsRef<Branch> {
     /// # Panics
     ///
     /// This method will panic if provided `index` is greater than the current length of an [ArrayRef].
-    fn insert_range<T, V>(&self, txn: &mut TransactionMut, index: u32, values: T)
+    fn insert_range<T, V>(
+        &self,
+        txn: &mut TransactionMut,
+        index: u32,
+        values: T,
+    ) -> Result<(), Error>
     where
         T: IntoIterator<Item = V>,
         V: Into<Any>,
     {
-        self.insert(txn, index, RangePrelim(values));
+        self.insert(txn, index, RangePrelim(values))?;
+        Ok(())
     }
 
     /// Inserts given `value` at the end of the current array.
     ///
     /// Returns a reference to an integrated preliminary input.
-    fn push_back<V>(&self, txn: &mut TransactionMut, value: V) -> V::Return
+    fn push_back<V>(&self, txn: &mut TransactionMut, value: V) -> Result<V::Return, Error>
     where
         V: Prelim,
     {
@@ -201,7 +211,7 @@ pub trait Array: AsRef<Branch> {
     /// Inserts given `value` at the beginning of the current array.
     ///
     /// Returns a reference to an integrated preliminary input.
-    fn push_front<V>(&self, txn: &mut TransactionMut, content: V) -> V::Return
+    fn push_front<V>(&self, txn: &mut TransactionMut, content: V) -> Result<V::Return, Error>
     where
         V: Prelim,
     {
@@ -209,7 +219,7 @@ pub trait Array: AsRef<Branch> {
     }
 
     /// Removes a single element at provided `index`.
-    fn remove(&self, txn: &mut TransactionMut, index: u32) {
+    fn remove(&self, txn: &mut TransactionMut, index: u32) -> Result<(), Error> {
         self.remove_range(txn, index, 1)
     }
 
@@ -217,12 +227,15 @@ pub trait Array: AsRef<Branch> {
     /// a particular number described by `len` has been deleted. This method panics in case when
     /// not all expected elements were removed (due to insufficient number of elements in an array)
     /// or `index` is outside of the bounds of an array.
-    fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
+    fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) -> Result<(), Error> {
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
             walker.delete(txn, len)
         } else {
-            panic!("Index {} is outside of the range of an array", index);
+            Err(Error::Other(format!(
+                "Index {} is outside of the range of an array",
+                index
+            )))
         }
     }
 
@@ -244,10 +257,10 @@ pub trait Array: AsRef<Branch> {
     ///
     /// This method panics if either `source` or `target` indexes are greater than current array's
     /// length.
-    fn move_to(&self, txn: &mut TransactionMut, source: u32, target: u32) {
+    fn move_to(&self, txn: &mut TransactionMut, source: u32, target: u32) -> Result<(), Error> {
         if source == target || source + 1 == target {
             // It doesn't make sense to move a range into the same range (it's basically a no-op).
-            return;
+            return Ok(());
         }
         let this = BranchPtr::from(self.as_ref());
         let left = StickyIndex::at(txn, this, source, Assoc::After)
@@ -256,12 +269,12 @@ pub trait Array: AsRef<Branch> {
         right.assoc = Assoc::Before;
         let mut walker = BlockIter::new(this);
         if walker.try_forward(txn, target) {
-            walker.insert_move(txn, left, right);
+            walker.insert_move(txn, left, right)
         } else {
-            panic!(
+            Err(Error::Other(format!(
                 "`target` index parameter {} is outside of the range of an array",
                 target
-            );
+            )))
         }
     }
 
@@ -294,10 +307,10 @@ pub trait Array: AsRef<Branch> {
         end: u32,
         assoc_end: Assoc,
         target: u32,
-    ) {
+    ) -> Result<(), Error> {
         if start <= target && target <= end {
             // It doesn't make sense to move a range into the same range (it's basically a no-op).
-            return;
+            return Ok(());
         }
         let this = BranchPtr::from(self.as_ref());
         let left = StickyIndex::at(txn, this, start, assoc_start)
@@ -306,12 +319,12 @@ pub trait Array: AsRef<Branch> {
             .expect("`end` index parameter is beyond the range of an y-array");
         let mut walker = BlockIter::new(this);
         if walker.try_forward(txn, target) {
-            walker.insert_move(txn, left, right);
+            walker.insert_move(txn, left, right)
         } else {
-            panic!(
+            Err(Error::Other(format!(
                 "`target` index parameter {} is outside of the range of an array",
                 target
-            );
+            )))
         }
     }
 
@@ -415,11 +428,12 @@ where
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) -> Result<(), Error> {
         let array = ArrayRef::from(inner_ref);
         for value in self.0 {
-            array.push_back(txn, value);
+            array.push_back(txn, value)?;
         }
+        Ok(())
     }
 }
 
@@ -458,7 +472,9 @@ where
         (ItemContent::Any(vec), None)
     }
 
-    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
+    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 /// Event generated by [ArrayRef::observe] method. Emitted during transaction commit phase.

@@ -354,7 +354,9 @@ impl Prelim for Move {
     }
 
     #[inline]
-    fn integrate(self, _: &mut TransactionMut, _inner_ref: BranchPtr) {}
+    fn integrate(self, _: &mut TransactionMut, _inner_ref: BranchPtr) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 impl std::fmt::Display for Move {

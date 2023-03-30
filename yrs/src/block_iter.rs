@@ -1,3 +1,5 @@
+use lib0::error::Error;
+
 use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim};
 use crate::moving::{Move, StickyIndex};
 use crate::transaction::{ReadTxn, TransactionMut};
@@ -297,10 +299,10 @@ impl BlockIter {
         self.reached_end = false;
     }
 
-    pub fn delete(&mut self, txn: &mut TransactionMut, mut len: u32) {
+    pub fn delete(&mut self, txn: &mut TransactionMut, mut len: u32) -> Result<(), Error> {
         let mut item = self.next_item;
         if self.index + len > self.branch.content_len() {
-            panic!("Length exceeded");
+            return Err(Error::Other("Length exceeded".into()));
         }
 
         let encoding = txn.store().options.offset_kind;
@@ -355,11 +357,13 @@ impl BlockIter {
                 if self.try_forward(txn, 0) {
                     item = self.next_item;
                 } else {
-                    panic!("Block iter couldn't move forward");
+                    return Err(Error::Other("Block iter couldn't move forward".into()));
                 }
             }
         }
         self.next_item = item;
+
+        Ok(())
     }
 
     pub(crate) fn slice<T: ReadTxn>(&mut self, txn: &T, buf: &mut [Value]) -> u32 {
@@ -465,7 +469,11 @@ impl BlockIter {
         }
     }
 
-    pub fn insert_contents<V: Prelim>(&mut self, txn: &mut TransactionMut, value: V) -> BlockPtr {
+    pub fn insert_contents<V: Prelim>(
+        &mut self,
+        txn: &mut TransactionMut,
+        value: V,
+    ) -> Result<BlockPtr, Error> {
         self.reduce_moves(txn);
         self.split_rel(txn);
         let id = {
@@ -501,7 +509,7 @@ impl BlockIter {
         local_block_list.push(block);
 
         if let Some(remainder) = remainder {
-            remainder.integrate(txn, inner_ref.unwrap().into())
+            remainder.integrate(txn, inner_ref.unwrap().into())?;
         }
 
         if let Some(Block::Item(item)) = right.as_deref() {
@@ -511,11 +519,17 @@ impl BlockIter {
             self.reached_end = true;
         }
 
-        block_ptr
+        Ok(block_ptr)
     }
 
-    pub fn insert_move(&mut self, txn: &mut TransactionMut, start: StickyIndex, end: StickyIndex) {
-        self.insert_contents(txn, Move::new(start, end, -1));
+    pub fn insert_move(
+        &mut self,
+        txn: &mut TransactionMut,
+        start: StickyIndex,
+        end: StickyIndex,
+    ) -> Result<(), Error> {
+        self.insert_contents(txn, Move::new(start, end, -1))?;
+        Ok(())
     }
 
     pub fn values<'a, 'txn, T: ReadTxn>(

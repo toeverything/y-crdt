@@ -2319,7 +2319,7 @@ pub trait Prelim: Sized {
     /// Method called once an original item filled with content from [Self::into_content] has been
     /// added to block store. This method is used by complex types such as maps or arrays to append
     /// the original contents of prelim struct into YMap, YArray etc.
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr);
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) -> Result<(), Error>;
 }
 
 impl<T> Prelim for T
@@ -2333,7 +2333,9 @@ where
         (ItemContent::Any(vec![value]), None)
     }
 
-    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
+    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -2346,7 +2348,9 @@ impl Prelim for PrelimString {
         (ItemContent::String(self.0.into()), None)
     }
 
-    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
+    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 /// Empty type marker, which can be used by a [Prelim] trait implementations when no integrated
@@ -2376,7 +2380,7 @@ where
 {
     type Return = T::Return;
 
-    fn into_content(mut self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         match self {
             EmbedPrelim::Primitive(any) => (ItemContent::Embed(Box::new(any)), None),
             EmbedPrelim::Shared(prelim) => {
@@ -2391,10 +2395,11 @@ where
         }
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) -> Result<(), Error> {
         if let EmbedPrelim::Shared(carrier) = self {
-            carrier.integrate(txn, inner_ref)
+            carrier.integrate(txn, inner_ref)?;
         }
+        Ok(())
     }
 }
 

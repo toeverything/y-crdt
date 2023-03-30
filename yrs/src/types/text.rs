@@ -7,6 +7,7 @@ use crate::types::{
 use crate::utils::OptionExt;
 use crate::*;
 use lib0::any::Any;
+use lib0::error::Error;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
@@ -82,12 +83,12 @@ use std::ops::{Deref, DerefMut};
 ///
 /// // insert binary payload eg. images
 /// let image = b"deadbeaf".to_vec();
-/// text.insert_embed(&mut txn, 1, image);
+/// text.insert_embed(&mut txn, 1, image).unwrap();
 ///
 /// // insert nested shared type eg. table as ArrayRef of ArrayRefs
-/// let table = text.insert_embed(&mut txn, 5, ArrayPrelim::default());
-/// let header = table.insert(&mut txn, 0, ArrayPrelim::from(["Book title", "Author"]));
-/// let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"]));
+/// let table = text.insert_embed(&mut txn, 5, ArrayPrelim::default()).unwrap();
+/// let header = table.insert(&mut txn, 0, ArrayPrelim::from(["Book title", "Author"])).unwrap();
+/// let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"])).unwrap();
 /// ```
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -207,9 +208,9 @@ pub trait Text: AsRef<Branch> {
     /// assert_eq!(ytext.get_string(txn), "Hi ★! to you");
     /// ```
     ///
-    fn insert(&self, txn: &mut TransactionMut, index: u32, chunk: &str) {
+    fn insert(&self, txn: &mut TransactionMut, index: u32, chunk: &str) -> Result<(), Error> {
         if chunk.is_empty() {
-            return;
+            return Ok(());
         }
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
@@ -222,9 +223,12 @@ pub trait Text: AsRef<Branch> {
                     break;
                 }
             }
-            txn.create_item(&pos, value, None);
+            txn.create_item(&pos, value, None)?;
+            Ok(())
         } else {
-            panic!("The type or the position doesn't exist!");
+            Err(Error::Other(
+                "The type or the position doesn't exist!".into(),
+            ))
         }
     }
 
@@ -242,7 +246,7 @@ pub trait Text: AsRef<Branch> {
         index: u32,
         chunk: &str,
         mut attributes: Attrs,
-    ) {
+    ) -> Result<(), Error> {
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
             pos.unset_missing(&mut attributes);
@@ -250,14 +254,18 @@ pub trait Text: AsRef<Branch> {
             let negated_attrs = insert_attributes(this, txn, &mut pos, attributes);
 
             let value = block::PrelimString(chunk.into());
-            let item = txn.create_item(&pos, value, None);
+            let item = txn.create_item(&pos, value, None)?;
 
             pos.right = Some(item);
             pos.forward();
 
             insert_negated_attributes(this, txn, &mut pos, negated_attrs);
+
+            Ok(())
         } else {
-            panic!("The type or the position doesn't exist!");
+            Err(Error::Other(
+                "The type or the position doesn't exist!".into(),
+            ))
         }
     }
 
@@ -268,20 +276,29 @@ pub trait Text: AsRef<Branch> {
     /// the end of it.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
-    fn insert_embed<V>(&self, txn: &mut TransactionMut, index: u32, content: V) -> V::Return
+    fn insert_embed<V>(
+        &self,
+        txn: &mut TransactionMut,
+        index: u32,
+        content: V,
+    ) -> Result<V::Return, Error>
     where
         V: Into<EmbedPrelim<V>> + Prelim,
     {
         let this = BranchPtr::from(self.as_ref());
         if let Some(pos) = find_position(this, txn, index) {
-            let ptr = txn.create_item(&pos, content.into(), None);
+            let ptr = txn.create_item(&pos, content.into(), None)?;
             if let Ok(integrated) = ptr.try_into() {
-                integrated
+                Ok(integrated)
             } else {
-                panic!("Defect: embedded return type doesn't match.")
+                Err(Error::Other(
+                    "Defect: embedded return type doesn't match.".into(),
+                ))
             }
         } else {
-            panic!("The type or the position doesn't exist!");
+            Err(Error::Other(
+                "The type or the position doesn't exist!".into(),
+            ))
         }
     }
 
@@ -299,7 +316,7 @@ pub trait Text: AsRef<Branch> {
         index: u32,
         embed: V,
         mut attributes: Attrs,
-    ) -> V::Return
+    ) -> Result<V::Return, Error>
     where
         V: Into<EmbedPrelim<V>> + Prelim,
     {
@@ -309,24 +326,28 @@ pub trait Text: AsRef<Branch> {
             minimize_attr_changes(&mut pos, &attributes);
             let negated_attrs = insert_attributes(this, txn, &mut pos, attributes);
 
-            let item = txn.create_item(&pos, embed.into(), None);
+            let item = txn.create_item(&pos, embed.into(), None)?;
 
             pos.right = Some(item.clone());
             pos.forward();
 
             insert_negated_attributes(this, txn, &mut pos, negated_attrs);
             if let Ok(integrated) = item.try_into() {
-                integrated
+                Ok(integrated)
             } else {
-                panic!("Defect: unexpected returned integrated type")
+                Err(Error::Other(
+                    "Defect: unexpected returned integrated type".into(),
+                ))
             }
         } else {
-            panic!("The type or the position doesn't exist!");
+            Err(Error::Other(
+                "The type or the position doesn't exist!".into(),
+            ))
         }
     }
 
     /// Appends a given `chunk` of text at the end of a current text structure.
-    fn push(&self, txn: &mut TransactionMut, chunk: &str) {
+    fn push(&self, txn: &mut TransactionMut, chunk: &str) -> Result<(), Error> {
         let idx = self.len(txn);
         self.insert(txn, idx, chunk)
     }
@@ -1264,12 +1285,14 @@ impl<T: Borrow<str>> Prelim for TextPrelim<T> {
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) -> Result<(), Error> {
         let borrowed = self.0.borrow();
         if !borrowed.is_empty() {
             let text = TextRef::from(inner_ref);
-            text.push(txn, borrowed);
+            text.push(txn, borrowed)?;
         }
+
+        Ok(())
     }
 }
 

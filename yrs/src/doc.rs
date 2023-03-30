@@ -876,7 +876,9 @@ impl Prelim for Doc {
         (ItemContent::Doc(None, self), None)
     }
 
-    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
+    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 /// For a Yjs compatibility reasons we expect subdocuments to be compared based on their reference
