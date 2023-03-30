@@ -1222,9 +1222,11 @@ pub unsafe extern "C" fn ytext_insert(
     let index = index as u32;
     if attrs.is_null() {
         txt.insert(txn, index, chunk)
+            .expect("failed to insert a chunk into a text")
     } else {
         if let Some(attrs) = map_attrs(attrs.read().into()) {
             txt.insert_with_attributes(txn, index, chunk, attrs)
+                .expect("failed to insert a chunk into a text with attributes")
         } else {
             panic!("ytext_insert: passed attributes are not of map type")
         }
@@ -1289,10 +1291,12 @@ pub unsafe extern "C" fn ytext_insert_embed(
     let index = index as u32;
     let content: Any = content.read().into();
     if attrs.is_null() {
-        txt.insert_embed(txn, index, content);
+        txt.insert_embed(txn, index, content)
+            .expect("failed to insert an embed into a text");
     } else {
         if let Some(attrs) = map_attrs(attrs.read().into()) {
-            txt.insert_embed_with_attributes(txn, index, content, attrs);
+            txt.insert_embed_with_attributes(txn, index, content, attrs)
+                .expect("failed to insert an embed into a text with attributes");
         } else {
             panic!("ytext_insert_embed: passed attributes are not of map type")
         }
@@ -1414,11 +1418,15 @@ pub unsafe extern "C" fn yarray_insert_range(
 
         if !vec.is_empty() {
             let len = vec.len() as u32;
-            array.insert_range(txn, j, vec);
+            array
+                .insert_range(txn, j, vec)
+                .expect("failed to insert a range of values into an array");
             j += len;
         } else {
             let val = ptr.offset(i).read();
-            array.insert(txn, j, val);
+            array
+                .insert(txn, j, val)
+                .expect("failed to insert a value into an array");
             i += 1;
             j += 1;
         }
@@ -1444,7 +1452,9 @@ pub unsafe extern "C" fn yarray_remove_range(
         .as_mut()
         .expect("provided transaction was not writeable");
 
-    array.remove_range(txn, index as u32, len as u32)
+    array
+        .remove_range(txn, index as u32, len as u32)
+        .expect("provided index and length must fit into boundaries of an array")
 }
 
 #[no_mangle]
@@ -1463,7 +1473,9 @@ pub unsafe extern "C" fn yarray_move(
         .as_mut()
         .expect("provided transaction was not writeable");
 
-    array.move_to(txn, source as u32, target as u32)
+    array
+        .move_to(txn, source as u32, target as u32)
+        .expect("provided source and target must fit into boundaries of an array")
 }
 
 /// Returns an iterator, which can be used to traverse over all elements of an `array` (`array`'s
@@ -1587,7 +1599,8 @@ pub unsafe extern "C" fn ymap_insert(
         .as_mut()
         .expect("provided transaction was not writeable");
 
-    map.insert(txn, key, value.read());
+    map.insert(txn, key, value.read())
+        .expect("failed to insert a new entry into a map");
 }
 
 /// Removes a `map` entry, given its `key`. Returns `1` if the corresponding entry was successfully
@@ -1719,7 +1732,8 @@ pub unsafe extern "C" fn yxmlelem_insert_attr(
     let key = CStr::from_ptr(attr_name).to_str().unwrap();
     let value = CStr::from_ptr(attr_value).to_str().unwrap();
 
-    xml.insert_attribute(txn, key, value);
+    xml.insert_attribute(txn, key, value)
+        .expect("failed to insert an attribute into an XML element");
 }
 
 /// Removes an attribute from a current `YXmlElement`, given its name.
@@ -2019,6 +2033,7 @@ pub unsafe extern "C" fn yxmlelem_insert_elem(
 
     let name = CStr::from_ptr(name).to_str().unwrap();
     xml.insert(txn, index as u32, XmlElementPrelim::empty(name))
+        .expect("failed to insert a new XML element into a document")
         .into_raw_branch()
 }
 
@@ -2042,6 +2057,7 @@ pub unsafe extern "C" fn yxmlelem_insert_text(
         .as_mut()
         .expect("provided transaction was not writeable");
     xml.insert(txn, index as u32, XmlTextPrelim::new(""))
+        .expect("failed to insert a new XML text node into a document")
         .into_raw_branch()
 }
 
@@ -2065,6 +2081,7 @@ pub unsafe extern "C" fn yxmlelem_remove_range(
         .expect("provided transaction was not writeable");
 
     xml.remove_range(txn, index as u32, len as u32)
+        .expect("provided range was outside of the boundaries of current XML element children")
 }
 
 /// Returns an XML child node (either a `YXmlElement` or `YXmlText`) stored at a given `index` of
@@ -2157,9 +2174,11 @@ pub unsafe extern "C" fn yxmltext_insert(
 
     if attrs.is_null() {
         txt.insert(txn, index as u32, chunk)
+            .expect("failed to insert a new XML text node into a document")
     } else {
         if let Some(attrs) = map_attrs(attrs.read().into()) {
             txt.insert_with_attributes(txn, index as u32, chunk, attrs)
+                .expect("failed to insert a new XML text node into a document")
         } else {
             panic!("yxmltext_insert: passed attributes are not of map type")
         }
@@ -2196,10 +2215,12 @@ pub unsafe extern "C" fn yxmltext_insert_embed(
     let index = index as u32;
     let content: Any = content.read().into();
     if attrs.is_null() {
-        txt.insert_embed(txn, index, content);
+        txt.insert_embed(txn, index, content)
+            .expect("failed to insert a new XML text node into a document");
     } else {
         if let Some(attrs) = map_attrs(attrs.read().into()) {
-            txt.insert_embed_with_attributes(txn, index, content, attrs);
+            txt.insert_embed_with_attributes(txn, index, content, attrs)
+                .expect("failed to insert a new XML text node into a document");
         } else {
             panic!("yxmltext_insert_embed: passed attributes are not of map type")
         }
@@ -2287,6 +2308,7 @@ pub unsafe extern "C" fn yxmltext_insert_attr(
     let value = CStr::from_ptr(attr_value).to_str().unwrap();
 
     txt.insert_attribute(txn, name, value)
+        .expect("failed to insert an attribute")
 }
 
 /// Removes an attribute from a current `YXmlText`, given its name.
@@ -2567,7 +2589,7 @@ impl Prelim for YInput {
         }
     }
 
-    fn integrate(self, txn: &mut yrs::TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut yrs::TransactionMut, inner_ref: BranchPtr) -> Result<(), Error> {
         unsafe {
             if self.tag == Y_MAP {
                 let map = MapRef::from(inner_ref);
@@ -2580,7 +2602,8 @@ impl Prelim for YInput {
                         .unwrap()
                         .to_owned();
                     let value = values.offset(i).read().into();
-                    map.insert(txn, key, value);
+                    map.insert(txn, key, value)
+                        .expect("failed to insert initial value to Map");
                 }
             } else if self.tag == Y_ARRAY {
                 let array = ArrayRef::from(inner_ref);
@@ -2589,19 +2612,24 @@ impl Prelim for YInput {
                 let mut i = 0;
                 while i < len {
                     let value = ptr.offset(i).read();
-                    array.push_back(txn, value);
+                    array
+                        .push_back(txn, value)
+                        .expect("failed to push initial value to Array");
                     i += 1;
                 }
             } else if self.tag == Y_TEXT {
                 let text = TextRef::from(inner_ref);
                 let init = CStr::from_ptr(self.value.str).to_str().unwrap();
-                text.push(txn, init);
+                text.push(txn, init)
+                    .expect("failed to push initial value to Text");
             } else if self.tag == Y_XML_TEXT {
                 let text = XmlTextRef::from(inner_ref);
                 let init = CStr::from_ptr(self.value.str).to_str().unwrap();
-                text.push(txn, init);
+                text.push(txn, init)
+                    .expect("failed to push initial value to XmlText");
             };
         }
+        Ok(())
     }
 }
 
