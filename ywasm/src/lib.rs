@@ -1949,14 +1949,13 @@ impl YText {
     pub fn format(&self, index: u32, length: u32, attributes: JsValue, txn: &ImplicitTransaction) {
         if let Some(attrs) = Self::parse_attrs(attributes) {
             match &mut *self.0.borrow_mut() {
-                SharedType::Integrated(v) => {
-                    if let Some(txn) = get_txn_mut(txn) {
-                        v.format(txn, index, length, attrs);
-                    } else {
-                        let mut txn = v.transact_mut();
-                        v.format(&mut txn, index, length, attrs);
-                    }
+                SharedType::Integrated(v) => if let Some(txn) = get_txn_mut(txn) {
+                    v.format(txn, index, length, attrs)
+                } else {
+                    let mut txn = v.transact_mut();
+                    v.format(&mut txn, index, length, attrs)
                 }
+                .expect("failed to format text"),
                 SharedType::Prelim(_) => {
                     panic!("format with attributes requires YText instance to be integrated first.")
                 }
@@ -2024,11 +2023,12 @@ impl YText {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn_mut(txn) {
-                    v.remove_range(txn, index, length);
+                    v.remove_range(txn, index, length)
                 } else {
                     let mut txn = v.transact_mut();
-                    v.remove_range(&mut txn, index, length);
+                    v.remove_range(&mut txn, index, length)
                 }
+                .expect("failed to delete a range of characters");
             }
             SharedType::Prelim(v) => {
                 v.drain((index as usize)..(index + length) as usize);
@@ -3331,6 +3331,7 @@ impl YXmlText {
                 let mut txn = self.0.transact_mut();
                 self.0.format(&mut txn, index as u32, len as u32, attrs)
             }
+            .expect("failed to format text")
         } else {
             panic!("couldn't parse format attributes")
         }
@@ -3395,6 +3396,7 @@ impl YXmlText {
             let mut txn = self.0.transact_mut();
             self.0.remove_range(&mut txn, index, length)
         }
+        .expect("failed to delete text")
     }
 
     /// Returns a next XML sibling node of this XMl node.

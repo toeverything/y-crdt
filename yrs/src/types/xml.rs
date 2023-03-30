@@ -1545,7 +1545,8 @@ mod test {
                 "a".into(),
                 HashMap::from([("href".into(), "http://domain.org")]).into(),
             )]),
-        );
+        )
+        .unwrap();
         drop(txn);
 
         let str = f.get_string(&doc.transact());
@@ -1567,12 +1568,12 @@ mod test {
         xml.insert(&mut txn, 0, "hello ").unwrap();
         xml.insert_with_attributes(&mut txn, 6, "world", italic)
             .unwrap();
-        xml.format(&mut txn, 0, 5, bold);
+        xml.format(&mut txn, 0, 5, bold).unwrap();
 
         assert_eq!(xml.get_string(&txn), "<b>hello</b> <i>world</i>");
 
         let remove_italic = Attrs::from([("i".into(), Any::Null)]);
-        xml.format(&mut txn, 6, 5, remove_italic);
+        xml.format(&mut txn, 6, 5, remove_italic).unwrap();
 
         assert_eq!(xml.get_string(&txn), "<b>hello</b> world");
     }

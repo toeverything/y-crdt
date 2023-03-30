@@ -1212,7 +1212,7 @@ mod test {
 
             // Update the document
             text.insert(&mut txn, 0, "abc").unwrap();
-            text.remove_range(&mut txn, 1, 2);
+            text.remove_range(&mut txn, 1, 2).unwrap();
             txn.commit();
 
             // Compare values
@@ -1310,7 +1310,7 @@ mod test {
         });
 
         for _ in 0..INPUT.len() as u32 {
-            txt1.remove_range(&mut d1.transact_mut(), 0, 1);
+            txt1.remove_range(&mut d1.transact_mut(), 0, 1).unwrap();
         }
 
         let expected = vec![(0..1), (1..2), (2..3), (3..4), (4..5)];

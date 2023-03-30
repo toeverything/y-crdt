@@ -171,7 +171,9 @@ where
                     let mut txn = doc.transact_mut();
                     match op {
                         TextOp::Insert(idx, txt) => text.insert(&mut txn, *idx, txt).unwrap(),
-                        TextOp::Delete(idx, len) => text.remove_range(&mut txn, *idx, *len),
+                        TextOp::Delete(idx, len) => {
+                            text.remove_range(&mut txn, *idx, *len).unwrap()
+                        }
                     }
                 }
             });
@@ -231,7 +233,7 @@ where
     fn apply(txn: &mut TransactionMut, txt: &TextRef, op: &TextOp) {
         match op {
             TextOp::Insert(idx, content) => txt.insert(txn, *idx, content).unwrap(),
-            TextOp::Delete(idx, len) => txt.remove_range(txn, *idx, *len),
+            TextOp::Delete(idx, len) => txt.remove_range(txn, *idx, *len).unwrap(),
         }
     }
 
@@ -425,7 +427,7 @@ fn b4_1(c: &mut Criterion, name: &str) {
                     let mut txn = doc.transact_mut();
                     match i {
                         TextOp::Insert(idx, chunk) => txt.insert(&mut txn, *idx, chunk).unwrap(),
-                        TextOp::Delete(idx, len) => txt.remove_range(&mut txn, *idx, *len),
+                        TextOp::Delete(idx, len) => txt.remove_range(&mut txn, *idx, *len).unwrap(),
                     }
                 }
             });

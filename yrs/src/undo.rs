@@ -668,14 +668,14 @@ mod test {
 
         // items that are added & deleted in the same transaction won't be undo
         txt1.insert(&mut d1.transact_mut(), 0, "test").unwrap();
-        txt1.remove_range(&mut d1.transact_mut(), 0, 4);
+        txt1.remove_range(&mut d1.transact_mut(), 0, 4).unwrap();
         mgr.undo().unwrap();
         assert_eq!(txt1.get_string(&d1.transact()), "");
 
         // follow redone items
         txt1.insert(&mut d1.transact_mut(), 0, "a").unwrap();
         mgr.reset();
-        txt1.remove_range(&mut d1.transact_mut(), 0, 1);
+        txt1.remove_range(&mut d1.transact_mut(), 0, 1).unwrap();
         mgr.reset();
         mgr.undo().unwrap();
         assert_eq!(txt1.get_string(&d1.transact()), "a");
@@ -693,7 +693,7 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        txt2.remove_range(&mut d2.transact_mut(), 0, 1);
+        txt2.remove_range(&mut d2.transact_mut(), 0, 1).unwrap();
 
         exchange_updates(&[&d1, &d2]);
 
@@ -704,7 +704,8 @@ mod test {
 
         // test marks
         let attrs = Attrs::from([("bold".into(), true.into())]);
-        txt1.format(&mut d1.transact_mut(), 1, 3, attrs.clone());
+        txt1.format(&mut d1.transact_mut(), 1, 3, attrs.clone())
+            .unwrap();
         let diff = txt1.diff(&d1.transact(), YChange::identity);
         assert_eq!(
             diff,
@@ -924,12 +925,14 @@ mod test {
         );
         // format textchild and revert that change
         mgr.reset();
-        text_child.format(
-            &mut d1.transact_mut(),
-            3,
-            4,
-            Attrs::from([("bold".into(), any!({}))]),
-        );
+        text_child
+            .format(
+                &mut d1.transact_mut(),
+                3,
+                4,
+                Attrs::from([("bold".into(), any!({}))]),
+            )
+            .unwrap();
         assert_eq!(
             xml1.get_string(&d1.transact()),
             "<undefined><p>con<bold>tent</bold></p></undefined>"
@@ -1358,14 +1361,16 @@ mod test {
         let mut mgr = UndoManager::new(&doc1, &txt);
 
         let attrs = Attrs::from([("bold".into(), true.into())]);
-        txt.format(&mut doc1.transact_mut(), 13, 7, attrs.clone()); // D1: 'Attack ships <b>on fire</b> off the shoulder of Orion.'
+        txt.format(&mut doc1.transact_mut(), 13, 7, attrs.clone())
+            .unwrap(); // D1: 'Attack ships <b>on fire</b> off the shoulder of Orion.'
 
         mgr.reset();
 
         send(&doc1, &doc2); // D2: 'Attack ships <b>on fire</b> off the shoulder of Orion.'
 
         let attrs2 = Attrs::from([("bold".into(), Any::Null)]);
-        txt.format(&mut doc1.transact_mut(), 16, 4, attrs2.clone()); // D1: 'Attack ships <b>on </b>fire off the shoulder of Orion.'
+        txt.format(&mut doc1.transact_mut(), 16, 4, attrs2.clone())
+            .unwrap(); // D1: 'Attack ships <b>on </b>fire off the shoulder of Orion.'
 
         let expected = vec![
             Diff::new("Attack ships ".into(), None),
@@ -1450,7 +1455,7 @@ mod test {
         {
             let mut txn = d1.transact_mut();
             let len = nested.len(&txn);
-            nested.remove_range(&mut txn, 0, len);
+            nested.remove_range(&mut txn, 0, len).unwrap();
         }
         nested
             .insert(&mut d1.transact_mut(), 0, "other text")

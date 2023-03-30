@@ -533,7 +533,9 @@ impl Branch {
             if index <= self.len() {
                 (self.start, BranchPtr::from(self))
             } else {
-                panic!("Cannot insert item at index over the length of an array")
+                return Err(Error::Other(
+                    "Cannot insert item at index over the length of an array".into(),
+                ));
             }
         };
         let (left, right) = if index == 0 {

@@ -1255,7 +1255,8 @@ pub unsafe extern "C" fn ytext_format(
             .expect("provided transaction was not writeable");
         let index = index as u32;
         let len = len as u32;
-        txt.format(txn, index, len, attrs);
+        txt.format(txn, index, len, attrs)
+            .expect("failed to format a text with attributes");
     } else {
         panic!("ytext_format: passed attributes are not of map type")
     }
@@ -1336,6 +1337,7 @@ pub unsafe extern "C" fn ytext_remove_range(
         .expect("provided transaction was not writeable");
     let txt = TextRef::from_raw_branch(txt);
     txt.remove_range(txn, index as u32, length as u32)
+        .expect("failed to remove a range of characters from a text")
 }
 
 /// Returns a number of elements stored within current instance of `YArray`.
@@ -2249,7 +2251,8 @@ pub unsafe extern "C" fn yxmltext_format(
             .expect("provided transaction was not writeable");
         let index = index as u32;
         let len = len as u32;
-        txt.format(txn, index, len, attrs);
+        txt.format(txn, index, len, attrs)
+            .expect("failed to format a range of characters within a YXmlText node");
     } else {
         panic!("yxmltext_format: passed attributes are not of map type")
     }
@@ -2279,6 +2282,7 @@ pub unsafe extern "C" fn yxmltext_remove_range(
         .as_mut()
         .expect("provided transaction was not writeable");
     txt.remove_range(txn, idx as u32, len as u32)
+        .expect("failed to remove a range of characters from a YXmlText node")
 }
 
 /// Inserts an XML attribute described using `attr_name` and `attr_value`. If another attribute with

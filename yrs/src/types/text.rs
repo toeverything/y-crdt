@@ -355,23 +355,35 @@ pub trait Text: AsRef<Branch> {
     /// Removes up to a `len` characters from a current text structure, starting at given `index`.
     /// This method panics in case when not all expected characters were removed (due to
     /// insufficient number of characters to remove) or `index` is outside of the bounds of text.
-    fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
+    fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) -> Result<(), Error> {
         let this = BranchPtr::from(self.as_ref());
         if let Some(pos) = find_position(this, txn, index) {
             remove(txn, pos, len)
         } else {
-            panic!("The type or the position doesn't exist!");
+            Err(Error::Other(
+                "The type or the position doesn't exist!".into(),
+            ))
         }
     }
 
     /// Wraps an existing piece of text within a range described by `index`-`len` parameters with
     /// formatting blocks containing provided `attributes` metadata.
-    fn format(&self, txn: &mut TransactionMut, index: u32, len: u32, attributes: Attrs) {
+    fn format(
+        &self,
+        txn: &mut TransactionMut,
+        index: u32,
+        len: u32,
+        attributes: Attrs,
+    ) -> Result<(), Error> {
         let this = BranchPtr::from(self.as_ref());
         if let Some(pos) = find_position(this, txn, index) {
-            insert_format(this, txn, pos, len, attributes)
+            insert_format(this, txn, pos, len, attributes);
+            Ok(())
         } else {
-            panic!("Index {} is outside of the range.", index);
+            Err(Error::Other(format!(
+                "Index {} is outside of the range.",
+                index
+            )))
         }
     }
 
@@ -397,10 +409,10 @@ pub trait Text: AsRef<Branch> {
     /// let bold = Attrs::from([("b".into(), true.into())]);
     /// let italic = Attrs::from([("i".into(), true.into())]);
     ///
-    /// text.insert_with_attributes(&mut txn, 0, "hello world", italic.clone()); // "<i>hello world</i>"
-    /// text.format(&mut txn, 6, 5, bold.clone()); // "<i>hello <b>world</b></i>"
+    /// text.insert_with_attributes(&mut txn, 0, "hello world", italic.clone()).unwrap(); // "<i>hello world</i>"
+    /// text.format(&mut txn, 6, 5, bold.clone()).unwrap(); // "<i>hello <b>world</b></i>"
     /// let image = vec![0, 0, 0, 0];
-    /// text.insert_embed(&mut txn, 5, image.clone()); // insert binary after "hello"
+    /// text.insert_embed(&mut txn, 5, image.clone()).unwrap(); // insert binary after "hello"
     ///
     /// let italic_and_bold = Attrs::from([
     ///   ("b".into(), true.into()),
@@ -656,7 +668,7 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
     Some(pos)
 }
 
-fn remove(txn: &mut TransactionMut, mut pos: ItemPosition, len: u32) {
+fn remove(txn: &mut TransactionMut, mut pos: ItemPosition, len: u32) -> Result<(), Error> {
     let encoding = txn.store().options.offset_kind;
     let mut remaining = len;
     let start = pos.right.clone();
@@ -695,11 +707,11 @@ fn remove(txn: &mut TransactionMut, mut pos: ItemPosition, len: u32) {
     }
 
     if remaining > 0 {
-        panic!(
+        return Err(Error::Other(format!(
             "Couldn't remove {} elements from an array. Only {} of them were successfully removed.",
             len,
             len - remaining
-        );
+        )));
     }
 
     if let (Some(start), Some(start_attrs), Some(end_attrs)) =
@@ -713,6 +725,8 @@ fn remove(txn: &mut TransactionMut, mut pos: ItemPosition, len: u32) {
             end_attrs.as_mut(),
         );
     }
+
+    Ok(())
 }
 
 fn is_valid_target(ptr: BlockPtr) -> bool {
@@ -1554,7 +1568,7 @@ mod test {
 
         txt.insert(&mut txn, 0, "bbb").unwrap();
         txt.insert(&mut txn, 0, "aaa").unwrap();
-        txt.remove_range(&mut txn, 0, 3);
+        txt.remove_range(&mut txn, 0, 3).unwrap();
 
         assert_eq!(txt.len(&txn), 3);
         assert_eq!(txt.get_string(&txn).as_str(), "bbb");
@@ -1568,7 +1582,7 @@ mod test {
 
         txt.insert(&mut txn, 0, "bbb").unwrap();
         txt.insert(&mut txn, 0, "aaa").unwrap();
-        txt.remove_range(&mut txn, 3, 3);
+        txt.remove_range(&mut txn, 3, 3).unwrap();
 
         assert_eq!(txt.get_string(&txn).as_str(), "aaa");
     }
@@ -1583,13 +1597,13 @@ mod test {
         txt.insert(&mut txn, 1, "b").unwrap();
         txt.insert(&mut txn, 2, "c").unwrap();
 
-        txt.remove_range(&mut txn, 1, 1);
+        txt.remove_range(&mut txn, 1, 1).unwrap();
         assert_eq!(txt.get_string(&txn).as_str(), "ac");
 
-        txt.remove_range(&mut txn, 1, 1);
+        txt.remove_range(&mut txn, 1, 1).unwrap();
         assert_eq!(txt.get_string(&txn).as_str(), "a");
 
-        txt.remove_range(&mut txn, 0, 1);
+        txt.remove_range(&mut txn, 0, 1).unwrap();
         assert_eq!(txt.get_string(&txn).as_str(), "");
     }
 
@@ -1600,7 +1614,7 @@ mod test {
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "abc").unwrap();
-        txt.remove_range(&mut txn, 1, 1);
+        txt.remove_range(&mut txn, 1, 1).unwrap();
 
         assert_eq!(txt.get_string(&txn).as_str(), "ac");
     }
@@ -1615,7 +1629,7 @@ mod test {
         txt.insert(&mut txn, 6, "beautiful").unwrap();
         txt.insert(&mut txn, 15, " world").unwrap();
 
-        txt.remove_range(&mut txn, 5, 11);
+        txt.remove_range(&mut txn, 5, 11).unwrap();
         assert_eq!(txt.get_string(&txn).as_str(), "helloworld");
     }
 
@@ -1626,7 +1640,7 @@ mod test {
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "hello ").unwrap();
-        txt.remove_range(&mut txn, 0, 5);
+        txt.remove_range(&mut txn, 0, 5).unwrap();
         txt.insert(&mut txn, 1, "world").unwrap();
 
         assert_eq!(txt.get_string(&txn).as_str(), " world");
@@ -1653,11 +1667,11 @@ mod test {
 
         txt1.insert(&mut t1, 5, " beautiful").unwrap();
         txt1.insert(&mut t1, 21, "!").unwrap();
-        txt1.remove_range(&mut t1, 0, 5);
+        txt1.remove_range(&mut t1, 0, 5).unwrap();
         assert_eq!(txt1.get_string(&t1).as_str(), " beautiful world!");
 
-        txt2.remove_range(&mut t2, 5, 5);
-        txt2.remove_range(&mut t2, 0, 1);
+        txt2.remove_range(&mut t2, 5, 5).unwrap();
+        txt2.remove_range(&mut t2, 0, 1).unwrap();
         txt2.insert(&mut t2, 0, "H").unwrap();
         assert_eq!(txt2.get_string(&t2).as_str(), "Hellod");
 
@@ -1698,7 +1712,7 @@ mod test {
         );
 
         // remove 2 chars from the middle
-        txt.remove_range(&mut doc.transact_mut(), 1, 2); // => 'ad'
+        txt.remove_range(&mut doc.transact_mut(), 1, 2).unwrap(); // => 'ad'
         assert_eq!(
             delta.borrow_mut().take(),
             Some(vec![Delta::Retain(1, None), Delta::Deleted(2)])
@@ -1718,7 +1732,8 @@ mod test {
 
         // remove formatting
         let attrs = Attrs::from([("bold".into(), Any::Null)]);
-        txt.format(&mut doc.transact_mut(), 1, 1, attrs.clone()); // => 'aed'
+        txt.format(&mut doc.transact_mut(), 1, 1, attrs.clone())
+            .unwrap(); // => 'aed'
         assert_eq!(
             delta.borrow_mut().take(),
             Some(vec![
@@ -1756,7 +1771,7 @@ mod test {
         // remove middle
         {
             let mut txn = d1.transact_mut();
-            txt.remove_range(&mut txn, 1, 2);
+            txt.remove_range(&mut txn, 1, 2).unwrap();
         }
         assert_eq!(
             delta.borrow_mut().take(),
@@ -1847,7 +1862,7 @@ mod test {
 
         {
             let mut txn = d1.transact_mut();
-            txt1.remove_range(&mut txn, 9, 3);
+            txt1.remove_range(&mut txn, 9, 3).unwrap();
             txt1.insert(&mut txn, 9, "si").unwrap();
 
             assert_eq!(txt1.get_string(&txn), "Zażółć gęsi jaźń");
@@ -1879,7 +1894,7 @@ mod test {
             if len > 0 {
                 let pos = rng.between(0, len - 1);
                 let to_delete = rng.between(2, len - pos);
-                ytext.remove_range(&mut txn, pos, to_delete);
+                ytext.remove_range(&mut txn, pos, to_delete).unwrap();
             }
         }
 
@@ -1948,7 +1963,7 @@ mod test {
         // step 2
         {
             let mut txn = d1.transact_mut();
-            txt1.remove_range(&mut txn, 0, 1);
+            txt1.remove_range(&mut txn, 0, 1).unwrap();
             let update = txn.encode_update_v1().unwrap();
             drop(txn);
 
@@ -1972,7 +1987,7 @@ mod test {
         // step 3
         {
             let mut txn = d1.transact_mut();
-            txt1.remove_range(&mut txn, 1, 1);
+            txt1.remove_range(&mut txn, 1, 1).unwrap();
             let update = txn.encode_update_v1().unwrap();
             drop(txn);
 
@@ -2049,7 +2064,7 @@ mod test {
         {
             let mut txn = d1.transact_mut();
             let b: Attrs = HashMap::from([("bold".into(), Any::Null)]);
-            txt1.format(&mut txn, 0, 2, b.clone());
+            txt1.format(&mut txn, 0, 2, b.clone()).unwrap();
             let update = txn.encode_update_v1().unwrap();
             drop(txn);
 
@@ -2177,7 +2192,8 @@ mod test {
             let mut d = delta_copy.borrow_mut();
             *d = Some(e.delta(txn).to_vec());
         });
-        txt1.format(&mut d1.transact_mut(), 1, 2, attrs.clone());
+        txt1.format(&mut d1.transact_mut(), 1, 2, attrs.clone())
+            .unwrap();
 
         let expected = vec![
             Delta::Retain(1, None),
@@ -2227,7 +2243,7 @@ mod test {
             let _observer = text
                 .observe(move |txn, edit| assert_eq!(edit.delta(txn)[0], Delta::Deleted(count)));
 
-            text.remove_range(&mut txn, 0, count);
+            text.remove_range(&mut txn, 0, count).unwrap();
             txn.commit();
         }
 
@@ -2267,7 +2283,8 @@ mod test {
         let d2 = Doc::new();
         exchange_updates(&[&d1, &d2]);
 
-        txt.remove_range(&mut d1.transact_mut(), 0, "😭".len() as u32);
+        txt.remove_range(&mut d1.transact_mut(), 0, "😭".len() as u32)
+            .unwrap();
         assert_eq!(txt.get_string(&txt.transact()).as_str(), "😊");
 
         exchange_updates(&[&d1, &d2]);
@@ -2285,7 +2302,8 @@ mod test {
         let d2 = Doc::new();
         exchange_updates(&[&d1, &d2]);
 
-        txt.remove_range(&mut d1.transact_mut(), 0, "⏰".len() as u32);
+        txt.remove_range(&mut d1.transact_mut(), 0, "⏰".len() as u32)
+            .unwrap();
         assert_eq!(txt.get_string(&txt.transact()).as_str(), "⏳");
 
         exchange_updates(&[&d1, &d2]);
@@ -2301,7 +2319,8 @@ mod test {
         txt.insert(&mut txn, 0, "😊😭").unwrap();
         // uncomment the following line will pass the test
         // txt.format(&mut txn, 0, "😊".len() as u32, HashMap::new());
-        txt.remove_range(&mut txn, "😊".len() as u32, "😭".len() as u32);
+        txt.remove_range(&mut txn, "😊".len() as u32, "😭".len() as u32)
+            .unwrap();
 
         assert_eq!(txt.get_string(&txn).as_str(), "😊");
     }
@@ -2315,7 +2334,8 @@ mod test {
         txt.insert(&mut txn, 0, "⏰⏳").unwrap();
         // uncomment the following line will pass the test
         // txt.format(&mut txn, 0, "⏰".len() as u32, HashMap::new());
-        txt.remove_range(&mut txn, "⏰".len() as u32, "⏳".len() as u32);
+        txt.remove_range(&mut txn, "⏰".len() as u32, "⏳".len() as u32)
+            .unwrap();
 
         assert_eq!(txt.get_string(&txn).as_str(), "⏰");
     }
@@ -2333,8 +2353,10 @@ mod test {
             "👯".len() as u32,
             "🙇‍♀️🙇‍♀️".len() as u32,
             HashMap::new(),
-        );
-        txt.remove_range(&mut txn, "👯🙇‍♀️🙇‍♀️".len() as u32, "⏰".len() as u32); // will delete ⏰ and 👩‍❤️‍💋‍👨
+        )
+        .unwrap();
+        txt.remove_range(&mut txn, "👯🙇‍♀️🙇‍♀️".len() as u32, "⏰".len() as u32)
+            .unwrap(); // will delete ⏰ and 👩‍❤️‍💋‍👨
 
         assert_eq!(txt.get_string(&txn).as_str(), "👯🙇‍♀️🙇‍♀️👩‍❤️‍💋‍👨");
     }
@@ -2352,10 +2374,12 @@ mod test {
             "👯".len() as u32,
             "🙇‍♀️🙇‍♀️".len() as u32,
             HashMap::new(),
-        );
+        )
+        .unwrap();
 
         // will delete ⏰ and 👩‍❤️‍💋‍👨
-        txt.remove_range(&mut txn, "👯🙇‍♀️🙇‍♀️".len() as u32, "⏰".len() as u32); // will delete ⏰ and 👩‍❤️‍💋‍👨
+        txt.remove_range(&mut txn, "👯🙇‍♀️🙇‍♀️".len() as u32, "⏰".len() as u32)
+            .unwrap(); // will delete ⏰ and 👩‍❤️‍💋‍👨
 
         assert_eq!(&txt.get_string(&txn), "👯🙇‍♀️🙇‍♀️👩‍❤️‍💋‍👨");
     }
@@ -2373,7 +2397,8 @@ mod test {
             "👯".len() as u32,
             "❤️❤️🙇‍♀️🙇‍♀️⏰".len() as u32,
             HashMap::new(),
-        );
+        )
+        .unwrap();
         txt.insert(&mut txn, "👯❤️❤️🙇‍♀️🙇‍♀️⏰".len() as u32, "⏰")
             .unwrap();
         txt.format(
@@ -2381,12 +2406,14 @@ mod test {
             "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰".len() as u32,
             "👩‍❤️‍💋‍👨".len() as u32,
             HashMap::new(),
-        );
+        )
+        .unwrap();
         txt.remove_range(
             &mut txn,
             "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👩".len() as u32,
             "👩‍❤️‍💋‍👨".len() as u32,
-        );
+        )
+        .unwrap();
         assert_eq!(txt.get_string(&txn).as_str(), "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👨");
     }
 
@@ -2450,7 +2477,7 @@ mod test {
 
         text.insert_with_attributes(&mut txn, 0, "hello world", italic.clone())
             .unwrap(); // "<i>hello world</i>"
-        text.format(&mut txn, 6, 5, bold.clone()); // "<i>hello <b>world</b></i>"
+        text.format(&mut txn, 6, 5, bold.clone()).unwrap(); // "<i>hello <b>world</b></i>"
         let image = vec![0, 0, 0, 0];
         text.insert_embed(&mut txn, 5, image.clone()).unwrap(); // insert binary after "hello"
         let array = text

@@ -847,10 +847,10 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         // t1: 'bbbaccccaaaa'
-        t1.remove_range(&mut d1.transact_mut(), 2, 2); // => 'bbccccaaaa'
-        t1.remove_range(&mut d1.transact_mut(), 3, 1); // => 'bbcccaaaa'
-        t1.remove_range(&mut d1.transact_mut(), 3, 1); // => 'bbccaaaa'
-        t1.remove_range(&mut d1.transact_mut(), 7, 1); // => 'bbccaaa'
+        t1.remove_range(&mut d1.transact_mut(), 2, 2).unwrap(); // => 'bbccccaaaa'
+        t1.remove_range(&mut d1.transact_mut(), 3, 1).unwrap(); // => 'bbcccaaaa'
+        t1.remove_range(&mut d1.transact_mut(), 3, 1).unwrap(); // => 'bbccaaaa'
+        t1.remove_range(&mut d1.transact_mut(), 7, 1).unwrap(); // => 'bbccaaa'
 
         let blocks = {
             let mut txn = d1.transact_mut();
