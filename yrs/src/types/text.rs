@@ -1333,11 +1333,11 @@ mod test {
 
         assert_eq!(txt.get_string(&txn).as_str(), "");
 
-        txt.push(&mut txn, "");
+        txt.push(&mut txn, "").unwrap();
         assert_eq!(txt.get_string(&txn).as_str(), "");
 
-        txt.push(&mut txn, "abc");
-        txt.push(&mut txn, "");
+        txt.push(&mut txn, "abc").unwrap();
+        txt.push(&mut txn, "").unwrap();
         assert_eq!(txt.get_string(&txn).as_str(), "abc");
     }
 
@@ -1347,9 +1347,9 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "a");
-        txt.insert(&mut txn, 1, "b");
-        txt.insert(&mut txn, 2, "c");
+        txt.insert(&mut txn, 0, "a").unwrap();
+        txt.insert(&mut txn, 1, "b").unwrap();
+        txt.insert(&mut txn, 2, "c").unwrap();
 
         assert_eq!(txt.get_string(&txn).as_str(), "abc");
     }
@@ -1360,9 +1360,9 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "hello");
-        txt.insert(&mut txn, 5, " ");
-        txt.insert(&mut txn, 6, "world");
+        txt.insert(&mut txn, 0, "hello").unwrap();
+        txt.insert(&mut txn, 5, " ").unwrap();
+        txt.insert(&mut txn, 6, "world").unwrap();
 
         assert_eq!(txt.get_string(&txn).as_str(), "hello world");
     }
@@ -1373,9 +1373,9 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "a");
-        txt.insert(&mut txn, 0, "b");
-        txt.insert(&mut txn, 0, "c");
+        txt.insert(&mut txn, 0, "a").unwrap();
+        txt.insert(&mut txn, 0, "b").unwrap();
+        txt.insert(&mut txn, 0, "c").unwrap();
 
         assert_eq!(txt.get_string(&txn).as_str(), "cba");
     }
@@ -1386,9 +1386,9 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "hello");
-        txt.insert(&mut txn, 0, " ");
-        txt.insert(&mut txn, 0, "world");
+        txt.insert(&mut txn, 0, "hello").unwrap();
+        txt.insert(&mut txn, 0, " ").unwrap();
+        txt.insert(&mut txn, 0, "world").unwrap();
 
         assert_eq!(txt.get_string(&txn).as_str(), "world hello");
     }
@@ -1399,10 +1399,10 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "hello");
-        txt.insert(&mut txn, 5, " ");
-        txt.insert(&mut txn, 6, "world");
-        txt.insert(&mut txn, 6, "beautiful ");
+        txt.insert(&mut txn, 0, "hello").unwrap();
+        txt.insert(&mut txn, 5, " ").unwrap();
+        txt.insert(&mut txn, 6, "world").unwrap();
+        txt.insert(&mut txn, 6, "beautiful ").unwrap();
 
         assert_eq!(txt.get_string(&txn).as_str(), "hello beautiful world");
     }
@@ -1413,8 +1413,8 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "it was expected");
-        txt.insert(&mut txn, 6, " not");
+        txt.insert(&mut txn, 0, "it was expected").unwrap();
+        txt.insert(&mut txn, 6, " not").unwrap();
 
         assert_eq!(txt.get_string(&txn).as_str(), "it was not expected");
     }
@@ -1425,13 +1425,13 @@ mod test {
         let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
-        txt1.insert(&mut t1, 0, "hello ");
+        txt1.insert(&mut t1, 0, "hello ").unwrap();
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
 
-        txt2.insert(&mut t2, 0, "world");
+        txt2.insert(&mut t2, 0, "world").unwrap();
 
         let d1_sv = t1.state_vector().encode_v1().unwrap();
         let d2_sv = t2.state_vector().encode_v1().unwrap();
@@ -1459,7 +1459,7 @@ mod test {
         let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
-        txt1.insert(&mut t1, 0, "I expect that");
+        txt1.insert(&mut t1, 0, "I expect that").unwrap();
         assert_eq!(txt1.get_string(&t1).as_str(), "I expect that");
 
         let d2 = Doc::with_client_id(2);
@@ -1474,11 +1474,11 @@ mod test {
 
         assert_eq!(txt2.get_string(&t2).as_str(), "I expect that");
 
-        txt2.insert(&mut t2, 1, " have");
-        txt2.insert(&mut t2, 13, "ed");
+        txt2.insert(&mut t2, 1, " have").unwrap();
+        txt2.insert(&mut t2, 13, "ed").unwrap();
         assert_eq!(txt2.get_string(&t2).as_str(), "I have expected that");
 
-        txt1.insert(&mut t1, 1, " didn't");
+        txt1.insert(&mut t1, 1, " didn't").unwrap();
         assert_eq!(txt1.get_string(&t1).as_str(), "I didn't expect that");
 
         let d2_sv = t2.state_vector().encode_v1().unwrap();
@@ -1505,7 +1505,7 @@ mod test {
         let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
-        txt1.insert(&mut t1, 0, "aaa");
+        txt1.insert(&mut t1, 0, "aaa").unwrap();
         assert_eq!(txt1.get_string(&t1).as_str(), "aaa");
 
         let d2 = Doc::with_client_id(2);
@@ -1520,11 +1520,11 @@ mod test {
 
         assert_eq!(txt2.get_string(&t2).as_str(), "aaa");
 
-        txt2.insert(&mut t2, 3, "bbb");
-        txt2.insert(&mut t2, 6, "bbb");
+        txt2.insert(&mut t2, 3, "bbb").unwrap();
+        txt2.insert(&mut t2, 6, "bbb").unwrap();
         assert_eq!(txt2.get_string(&t2).as_str(), "aaabbbbbb");
 
-        txt1.insert(&mut t1, 3, "aaa");
+        txt1.insert(&mut t1, 3, "aaa").unwrap();
         assert_eq!(txt1.get_string(&t1).as_str(), "aaaaaa");
 
         let d2_sv = t2.state_vector().encode_v1().unwrap();
@@ -1552,8 +1552,8 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "bbb");
-        txt.insert(&mut txn, 0, "aaa");
+        txt.insert(&mut txn, 0, "bbb").unwrap();
+        txt.insert(&mut txn, 0, "aaa").unwrap();
         txt.remove_range(&mut txn, 0, 3);
 
         assert_eq!(txt.len(&txn), 3);
@@ -1566,8 +1566,8 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "bbb");
-        txt.insert(&mut txn, 0, "aaa");
+        txt.insert(&mut txn, 0, "bbb").unwrap();
+        txt.insert(&mut txn, 0, "aaa").unwrap();
         txt.remove_range(&mut txn, 3, 3);
 
         assert_eq!(txt.get_string(&txn).as_str(), "aaa");
@@ -1579,9 +1579,9 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "a");
-        txt.insert(&mut txn, 1, "b");
-        txt.insert(&mut txn, 2, "c");
+        txt.insert(&mut txn, 0, "a").unwrap();
+        txt.insert(&mut txn, 1, "b").unwrap();
+        txt.insert(&mut txn, 2, "c").unwrap();
 
         txt.remove_range(&mut txn, 1, 1);
         assert_eq!(txt.get_string(&txn).as_str(), "ac");
@@ -1599,7 +1599,7 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "abc");
+        txt.insert(&mut txn, 0, "abc").unwrap();
         txt.remove_range(&mut txn, 1, 1);
 
         assert_eq!(txt.get_string(&txn).as_str(), "ac");
@@ -1611,9 +1611,9 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "hello ");
-        txt.insert(&mut txn, 6, "beautiful");
-        txt.insert(&mut txn, 15, " world");
+        txt.insert(&mut txn, 0, "hello ").unwrap();
+        txt.insert(&mut txn, 6, "beautiful").unwrap();
+        txt.insert(&mut txn, 15, " world").unwrap();
 
         txt.remove_range(&mut txn, 5, 11);
         assert_eq!(txt.get_string(&txn).as_str(), "helloworld");
@@ -1625,9 +1625,9 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "hello ");
+        txt.insert(&mut txn, 0, "hello ").unwrap();
         txt.remove_range(&mut txn, 0, 5);
-        txt.insert(&mut txn, 1, "world");
+        txt.insert(&mut txn, 1, "world").unwrap();
 
         assert_eq!(txt.get_string(&txn).as_str(), " world");
     }
@@ -1638,7 +1638,7 @@ mod test {
         let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
-        txt1.insert(&mut t1, 0, "hello world");
+        txt1.insert(&mut t1, 0, "hello world").unwrap();
         assert_eq!(txt1.get_string(&t1).as_str(), "hello world");
 
         let u1 = t1
@@ -1651,14 +1651,14 @@ mod test {
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
         assert_eq!(txt2.get_string(&t2).as_str(), "hello world");
 
-        txt1.insert(&mut t1, 5, " beautiful");
-        txt1.insert(&mut t1, 21, "!");
+        txt1.insert(&mut t1, 5, " beautiful").unwrap();
+        txt1.insert(&mut t1, 21, "!").unwrap();
         txt1.remove_range(&mut t1, 0, 5);
         assert_eq!(txt1.get_string(&t1).as_str(), " beautiful world!");
 
         txt2.remove_range(&mut t2, 5, 5);
         txt2.remove_range(&mut t2, 0, 1);
-        txt2.insert(&mut t2, 0, "H");
+        txt2.insert(&mut t2, 0, "H").unwrap();
         assert_eq!(txt2.get_string(&t2).as_str(), "Hellod");
 
         let sv1 = t1.state_vector().encode_v1().unwrap();
@@ -1691,7 +1691,7 @@ mod test {
         });
 
         // insert initial data to an empty YText
-        txt.insert(&mut doc.transact_mut(), 0, "abcd"); // => 'abcd'
+        txt.insert(&mut doc.transact_mut(), 0, "abcd").unwrap(); // => 'abcd'
         assert_eq!(
             delta.borrow_mut().take(),
             Some(vec![Delta::Inserted("abcd".into(), None)])
@@ -1706,7 +1706,8 @@ mod test {
 
         // insert new item in the middle
         let attrs = Attrs::from([("bold".into(), true.into())]);
-        txt.insert_with_attributes(&mut doc.transact_mut(), 1, "e", attrs.clone()); // => 'a<bold>e</bold>d'
+        txt.insert_with_attributes(&mut doc.transact_mut(), 1, "e", attrs.clone())
+            .unwrap(); // => 'a<bold>e</bold>d'
         assert_eq!(
             delta.borrow_mut().take(),
             Some(vec![
@@ -1728,7 +1729,7 @@ mod test {
 
         // free the observer and make sure that callback is no longer called
         drop(sub);
-        txt.insert(&mut doc.transact_mut(), 1, "fgh"); // => 'afghed'
+        txt.insert(&mut doc.transact_mut(), 1, "fgh").unwrap(); // => 'afghed'
         assert_eq!(delta.borrow_mut().take(), None);
     }
 
@@ -1745,7 +1746,7 @@ mod test {
         // insert initial string
         {
             let mut txn = d1.transact_mut();
-            txt.insert(&mut txn, 0, "abcd");
+            txt.insert(&mut txn, 0, "abcd").unwrap();
         }
         assert_eq!(
             delta.borrow_mut().take(),
@@ -1765,7 +1766,7 @@ mod test {
         // insert again
         {
             let mut txn = d1.transact_mut();
-            txt.insert(&mut txn, 1, "ef");
+            txt.insert(&mut txn, 1, "ef").unwrap();
         }
         assert_eq!(
             delta.borrow_mut().take(),
@@ -1806,8 +1807,8 @@ mod test {
         let doc = Doc::with_options(options);
         let txt = doc.get_or_insert_text("content");
 
-        txt.insert(&mut doc.transact_mut(), 0, r#"“”"#); // these chars are 3B long each
-        txt.insert(&mut doc.transact_mut(), 1, r#"test"#);
+        txt.insert(&mut doc.transact_mut(), 0, r#"“”"#).unwrap(); // these chars are 3B long each
+        txt.insert(&mut doc.transact_mut(), 1, r#"test"#).unwrap();
 
         assert_eq!(txt.get_string(&txt.transact()), r#"“test”"#);
     }
@@ -1831,7 +1832,7 @@ mod test {
         {
             let mut txn = d1.transact_mut();
 
-            txt1.insert(&mut txn, 0, "Zażółć gęślą jaźń");
+            txt1.insert(&mut txn, 0, "Zażółć gęślą jaźń").unwrap();
             assert_eq!(txt1.get_string(&txn), "Zażółć gęślą jaźń");
             assert_eq!(txt1.len(&txn), 17);
         }
@@ -1847,7 +1848,7 @@ mod test {
         {
             let mut txn = d1.transact_mut();
             txt1.remove_range(&mut txn, 9, 3);
-            txt1.insert(&mut txn, 9, "si");
+            txt1.insert(&mut txn, 9, "si").unwrap();
 
             assert_eq!(txt1.get_string(&txn), "Zażółć gęsi jaźń");
             assert_eq!(txt1.len(&txn), 16);
@@ -1868,7 +1869,7 @@ mod test {
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, ytext.len(&txn));
             let word = rng.random_string();
-            ytext.insert(&mut txn, pos, word.as_str());
+            ytext.insert(&mut txn, pos, word.as_str()).unwrap();
         }
 
         fn delete_text(doc: &mut Doc, rng: &mut StdRng) {
@@ -1919,7 +1920,8 @@ mod test {
         // step 1
         {
             let mut txn = d1.transact_mut();
-            txt1.insert_with_attributes(&mut txn, 0, "abc", a.clone());
+            txt1.insert_with_attributes(&mut txn, 0, "abc", a.clone())
+                .unwrap();
             let update = txn.encode_update_v1().unwrap();
             drop(txn);
 
@@ -1994,7 +1996,8 @@ mod test {
         // step 4
         {
             let mut txn = d1.transact_mut();
-            txt1.insert_with_attributes(&mut txn, 0, "z", a.clone());
+            txt1.insert_with_attributes(&mut txn, 0, "z", a.clone())
+                .unwrap();
             let update = txn.encode_update_v1().unwrap();
             drop(txn);
 
@@ -2018,7 +2021,7 @@ mod test {
         // step 5
         {
             let mut txn = d1.transact_mut();
-            txt1.insert(&mut txn, 0, "y");
+            txt1.insert(&mut txn, 0, "y").unwrap();
             let update = txn.encode_update_v1().unwrap();
             drop(txn);
 
@@ -2093,11 +2096,13 @@ mod test {
 
         let (update_v1, update_v2) = {
             let mut txn = d1.transact_mut();
-            txt1.insert_with_attributes(&mut txn, 0, "ab", a1.clone());
+            txt1.insert_with_attributes(&mut txn, 0, "ab", a1.clone())
+                .unwrap();
 
             let a2: Attrs = HashMap::from([("width".into(), Any::Number(100.0))]);
 
-            txt1.insert_embed_with_attributes(&mut txn, 1, embed.clone(), a2.clone());
+            txt1.insert_embed_with_attributes(&mut txn, 1, embed.clone(), a2.clone())
+                .unwrap();
             drop(txn);
 
             let a1 = Some(Box::new(a1.clone()));
@@ -2166,7 +2171,7 @@ mod test {
 
         let attrs: Attrs = HashMap::from([("bold".into(), true.into())]);
 
-        txt1.insert(&mut d1.transact_mut(), 0, "abcd");
+        txt1.insert(&mut d1.transact_mut(), 0, "abcd").unwrap();
 
         let _sub = txt1.observe(move |txn, e| {
             let mut d = delta_copy.borrow_mut();
@@ -2200,14 +2205,14 @@ mod test {
         {
             let text = doc.get_or_insert_text("content");
             let mut txn = doc.transact_mut();
-            text.insert(&mut txn, 0, text1);
+            text.insert(&mut txn, 0, text1).unwrap();
             txn.commit();
         }
 
         {
             let text = doc.get_or_insert_text("content");
             let mut txn = doc.transact_mut();
-            text.insert(&mut txn, 100, text2);
+            text.insert(&mut txn, 100, text2).unwrap();
             txn.commit();
         }
 
@@ -2238,9 +2243,11 @@ mod test {
         let txt = doc.get_or_insert_text("text");
         let mut txn = doc.transact_mut();
         let attrs1 = Attrs::from([("a".into(), "a".into())]);
-        txt.insert_with_attributes(&mut txn, 0, "abc", attrs1.clone());
+        txt.insert_with_attributes(&mut txn, 0, "abc", attrs1.clone())
+            .unwrap();
         let attrs2 = Attrs::from([("a".into(), "a".into()), ("b".into(), "b".into())]);
-        txt.insert_with_attributes(&mut txn, 3, "def", attrs2.clone());
+        txt.insert_with_attributes(&mut txn, 3, "def", attrs2.clone())
+            .unwrap();
 
         let diff = txt.diff(&mut txn, YChange::identity);
         let expected = vec![
@@ -2255,7 +2262,7 @@ mod test {
         let d1 = Doc::new();
         let txt = d1.get_or_insert_text("test");
 
-        txt.insert(&mut d1.transact_mut(), 0, "😭😊");
+        txt.insert(&mut d1.transact_mut(), 0, "😭😊").unwrap();
 
         let d2 = Doc::new();
         exchange_updates(&[&d1, &d2]);
@@ -2273,7 +2280,7 @@ mod test {
         let d1 = Doc::new();
         let txt = d1.get_or_insert_text("test");
 
-        txt.insert(&mut d1.transact_mut(), 0, "⏰⏳");
+        txt.insert(&mut d1.transact_mut(), 0, "⏰⏳").unwrap();
 
         let d2 = Doc::new();
         exchange_updates(&[&d1, &d2]);
@@ -2291,7 +2298,7 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "😊😭");
+        txt.insert(&mut txn, 0, "😊😭").unwrap();
         // uncomment the following line will pass the test
         // txt.format(&mut txn, 0, "😊".len() as u32, HashMap::new());
         txt.remove_range(&mut txn, "😊".len() as u32, "😭".len() as u32);
@@ -2305,7 +2312,7 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "⏰⏳");
+        txt.insert(&mut txn, 0, "⏰⏳").unwrap();
         // uncomment the following line will pass the test
         // txt.format(&mut txn, 0, "⏰".len() as u32, HashMap::new());
         txt.remove_range(&mut txn, "⏰".len() as u32, "⏳".len() as u32);
@@ -2319,7 +2326,7 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "👯🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨");
+        txt.insert(&mut txn, 0, "👯🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨").unwrap();
 
         txt.format(
             &mut txn,
@@ -2338,8 +2345,8 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨");
-        txt.insert(&mut txn, 0, "👯");
+        txt.insert(&mut txn, 0, "🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨").unwrap();
+        txt.insert(&mut txn, 0, "👯").unwrap();
         txt.format(
             &mut txn,
             "👯".len() as u32,
@@ -2359,15 +2366,16 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.insert(&mut txn, 0, "❤️❤️🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨👩‍❤️‍💋‍👨");
-        txt.insert(&mut txn, 0, "👯");
+        txt.insert(&mut txn, 0, "❤️❤️🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨👩‍❤️‍💋‍👨").unwrap();
+        txt.insert(&mut txn, 0, "👯").unwrap();
         txt.format(
             &mut txn,
             "👯".len() as u32,
             "❤️❤️🙇‍♀️🙇‍♀️⏰".len() as u32,
             HashMap::new(),
         );
-        txt.insert(&mut txn, "👯❤️❤️🙇‍♀️🙇‍♀️⏰".len() as u32, "⏰");
+        txt.insert(&mut txn, "👯❤️❤️🙇‍♀️🙇‍♀️⏰".len() as u32, "⏰")
+            .unwrap();
         txt.format(
             &mut txn,
             "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰".len() as u32,
@@ -2389,8 +2397,10 @@ mod test {
         let mut txn = doc.transact_mut();
 
         let attrs = Attrs::from([("a".into(), "a".into())]);
-        txt.insert_with_attributes(&mut txn, 0, "ac", attrs.clone());
-        txt.insert_with_attributes(&mut txn, 1, "b", Attrs::new());
+        txt.insert_with_attributes(&mut txn, 0, "ac", attrs.clone())
+            .unwrap();
+        txt.insert_with_attributes(&mut txn, 1, "b", Attrs::new())
+            .unwrap();
 
         let expect = vec![
             Diff::new("a".into(), Some(Box::new(attrs.clone()))),
@@ -2405,9 +2415,9 @@ mod test {
     fn snapshots() {
         let doc = Doc::with_client_id(1);
         let text = doc.get_or_insert_text("text");
-        text.insert(&mut doc.transact_mut(), 0, "hello");
+        text.insert(&mut doc.transact_mut(), 0, "hello").unwrap();
         let prev = doc.transact_mut().snapshot();
-        text.insert(&mut doc.transact_mut(), 5, " world");
+        text.insert(&mut doc.transact_mut(), 5, " world").unwrap();
         let next = doc.transact_mut().snapshot();
         let diff = text.diff_range(
             &mut doc.transact_mut(),
@@ -2438,11 +2448,14 @@ mod test {
         let bold = Attrs::from([("b".into(), true.into())]);
         let italic = Attrs::from([("i".into(), true.into())]);
 
-        text.insert_with_attributes(&mut txn, 0, "hello world", italic.clone()); // "<i>hello world</i>"
+        text.insert_with_attributes(&mut txn, 0, "hello world", italic.clone())
+            .unwrap(); // "<i>hello world</i>"
         text.format(&mut txn, 6, 5, bold.clone()); // "<i>hello <b>world</b></i>"
         let image = vec![0, 0, 0, 0];
-        text.insert_embed(&mut txn, 5, image.clone()); // insert binary after "hello"
-        let array = text.insert_embed(&mut txn, 5, ArrayPrelim::default()); // insert array ref after "hello"
+        text.insert_embed(&mut txn, 5, image.clone()).unwrap(); // insert binary after "hello"
+        let array = text
+            .insert_embed(&mut txn, 5, ArrayPrelim::default())
+            .unwrap(); // insert array ref after "hello"
 
         let italic_and_bold = Attrs::from([("b".into(), true.into()), ("i".into(), true.into())]);
         let chunks = text.diff(&txn, YChange::identity);
@@ -2475,7 +2488,7 @@ mod test {
                 let doc = d2.write().unwrap();
                 let txt = doc.get_or_insert_text("test");
                 let mut txn = doc.transact_mut();
-                txt.push(&mut txn, "a");
+                txt.push(&mut txn, "a").unwrap();
             }
         });
 
@@ -2488,7 +2501,7 @@ mod test {
                 let doc = d3.write().unwrap();
                 let txt = doc.get_or_insert_text("test");
                 let mut txn = txt.transact_mut();
-                txt.push(&mut txn, "b");
+                txt.push(&mut txn, "b").unwrap();
             }
         });
 

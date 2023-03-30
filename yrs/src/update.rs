@@ -1094,11 +1094,11 @@ mod test {
         let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
 
-        txt1.insert(&mut t1, 0, "aaa");
-        txt1.insert(&mut t1, 0, "aaa");
+        txt1.insert(&mut t1, 0, "aaa").unwrap();
+        txt1.insert(&mut t1, 0, "aaa").unwrap();
 
-        txt2.insert(&mut t2, 0, "bbb");
-        txt2.insert(&mut t2, 2, "bbb");
+        txt2.insert(&mut t2, 0, "bbb").unwrap();
+        txt2.insert(&mut t2, 2, "bbb").unwrap();
 
         let binary1 = t1.encode_update_v1().unwrap();
         let binary2 = t2.encode_update_v1().unwrap();
@@ -1131,7 +1131,7 @@ mod test {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
         let mut tr = doc.transact_mut();
-        txt.insert(&mut tr, 0, "aaa");
+        txt.insert(&mut tr, 0, "aaa").unwrap();
 
         let binary = tr.encode_update_v1().unwrap();
         let u1 = decode_update(&binary);
@@ -1148,14 +1148,14 @@ mod test {
             let doc = Doc::with_client_id(1);
             let txt = doc.get_or_insert_text("test");
             let mut tr = doc.transact_mut();
-            txt.insert(&mut tr, 0, "aaa");
+            txt.insert(&mut tr, 0, "aaa").unwrap();
             tr.encode_update_v1().unwrap()
         };
         let binary2 = {
             let doc = Doc::with_client_id(2);
             let txt = doc.get_or_insert_text("test");
             let mut tr = doc.transact_mut();
-            txt.insert(&mut tr, 0, "bbb");
+            txt.insert(&mut tr, 0, "bbb").unwrap();
             tr.encode_update_v1().unwrap()
         };
 

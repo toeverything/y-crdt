@@ -667,13 +667,13 @@ mod test {
         let txt2 = d2.get_or_insert_text("test");
 
         // items that are added & deleted in the same transaction won't be undo
-        txt1.insert(&mut d1.transact_mut(), 0, "test");
+        txt1.insert(&mut d1.transact_mut(), 0, "test").unwrap();
         txt1.remove_range(&mut d1.transact_mut(), 0, 4);
         mgr.undo().unwrap();
         assert_eq!(txt1.get_string(&d1.transact()), "");
 
         // follow redone items
-        txt1.insert(&mut d1.transact_mut(), 0, "a");
+        txt1.insert(&mut d1.transact_mut(), 0, "a").unwrap();
         mgr.reset();
         txt1.remove_range(&mut d1.transact_mut(), 0, 1);
         mgr.reset();
@@ -682,8 +682,8 @@ mod test {
         mgr.undo().unwrap();
         assert_eq!(txt1.get_string(&d1.transact()), "");
 
-        txt1.insert(&mut d1.transact_mut(), 0, "abc");
-        txt2.insert(&mut d2.transact_mut(), 0, "xyz");
+        txt1.insert(&mut d1.transact_mut(), 0, "abc").unwrap();
+        txt2.insert(&mut d2.transact_mut(), 0, "xyz").unwrap();
 
         exchange_updates(&[&d1, &d2]);
         mgr.undo().unwrap();
@@ -735,16 +735,16 @@ mod test {
     fn double_undo() {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
-        txt.insert(&mut doc.transact_mut(), 0, "1221");
+        txt.insert(&mut doc.transact_mut(), 0, "1221").unwrap();
 
         let mut mgr = UndoManager::new(&doc, &txt);
-        txt.insert(&mut doc.transact_mut(), 2, "3");
-        txt.insert(&mut doc.transact_mut(), 3, "3");
+        txt.insert(&mut doc.transact_mut(), 2, "3").unwrap();
+        txt.insert(&mut doc.transact_mut(), 3, "3").unwrap();
 
         mgr.undo().unwrap();
         mgr.undo().unwrap();
 
-        txt.insert(&mut doc.transact_mut(), 2, "3");
+        txt.insert(&mut doc.transact_mut(), 2, "3").unwrap();
         assert_eq!(txt.get_string(&doc.transact()), "12321");
     }
 
@@ -756,17 +756,19 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let map2 = d2.get_or_insert_map("test");
 
-        map1.insert(&mut d1.transact_mut(), "a", 0);
+        map1.insert(&mut d1.transact_mut(), "a", 0).unwrap();
         let mut mgr = UndoManager::new(&d1, &map1);
-        map1.insert(&mut d1.transact_mut(), "a", 1);
+        map1.insert(&mut d1.transact_mut(), "a", 1).unwrap();
         mgr.undo().unwrap();
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 0.into());
         mgr.redo().unwrap();
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 1.into());
 
         // testing sub-types and if it can restore a whole type
-        let sub_type = map1.insert(&mut d1.transact_mut(), "a", MapPrelim::<u32>::new());
-        sub_type.insert(&mut d1.transact_mut(), "x", 42);
+        let sub_type = map1
+            .insert(&mut d1.transact_mut(), "a", MapPrelim::<u32>::new())
+            .unwrap();
+        sub_type.insert(&mut d1.transact_mut(), "x", 42).unwrap();
         let actual = map1.to_json(&d1.transact());
         let expected = Any::from_json(r#"{ "a": { "x": 42 } }"#).unwrap();
         assert_eq!(actual, expected);
@@ -781,7 +783,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         // if content is overwritten by another user, undo operations should be skipped
-        map2.insert(&mut d2.transact_mut(), "a", 44);
+        map2.insert(&mut d2.transact_mut(), "a", 44).unwrap();
 
         exchange_updates(&[&d1, &d2]);
         exchange_updates(&[&d1, &d2]);
@@ -792,10 +794,10 @@ mod test {
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 44.into());
 
         // test setting value multiple times
-        map1.insert(&mut d1.transact_mut(), "b", "initial");
+        map1.insert(&mut d1.transact_mut(), "b", "initial").unwrap();
         mgr.reset();
-        map1.insert(&mut d1.transact_mut(), "b", "val1");
-        map1.insert(&mut d1.transact_mut(), "b", "val2");
+        map1.insert(&mut d1.transact_mut(), "b", "val1").unwrap();
+        map1.insert(&mut d1.transact_mut(), "b", "val2").unwrap();
         mgr.reset();
         mgr.undo().unwrap();
         assert_eq!(map1.get(&d1.transact(), "b").unwrap(), "initial".into());
@@ -810,8 +812,12 @@ mod test {
         let array2 = d2.get_or_insert_array("test");
 
         let mut mgr = UndoManager::new(&d1, &array1);
-        array1.insert_range(&mut d1.transact_mut(), 0, [1, 2, 3]);
-        array2.insert_range(&mut d2.transact_mut(), 0, [4, 5, 6]);
+        array1
+            .insert_range(&mut d1.transact_mut(), 0, [1, 2, 3])
+            .unwrap();
+        array2
+            .insert_range(&mut d2.transact_mut(), 0, [4, 5, 6])
+            .unwrap();
 
         exchange_updates(&[&d1, &d2]);
 
@@ -829,7 +835,7 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        array2.remove_range(&mut d2.transact_mut(), 0, 1); // user2 deletes [1]
+        array2.remove_range(&mut d2.transact_mut(), 0, 1).unwrap(); // user2 deletes [1]
 
         exchange_updates(&[&d1, &d2]);
 
@@ -837,15 +843,17 @@ mod test {
         assert_eq!(array1.to_json(&d1.transact()), vec![4, 5, 6].into());
         mgr.redo().unwrap();
         assert_eq!(array1.to_json(&d1.transact()), vec![2, 3, 4, 5, 6].into());
-        array1.remove_range(&mut d1.transact_mut(), 0, 5);
+        array1.remove_range(&mut d1.transact_mut(), 0, 5).unwrap();
 
         // test nested structure
-        let map = array1.insert(&mut d1.transact_mut(), 0, MapPrelim::<u32>::new());
+        let map = array1
+            .insert(&mut d1.transact_mut(), 0, MapPrelim::<u32>::new())
+            .unwrap();
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{}]"#).unwrap();
         assert_eq!(actual, expected);
         mgr.reset();
-        map.insert(&mut d1.transact_mut(), "a", 1);
+        map.insert(&mut d1.transact_mut(), "a", 1).unwrap();
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{"a":1}]"#).unwrap();
         assert_eq!(actual, expected);
@@ -871,7 +879,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let map2 = array2.get(&d2.transact(), 0).unwrap().to_ymap().unwrap();
-        map2.insert(&mut d2.transact_mut(), "b", 2);
+        map2.insert(&mut d2.transact_mut(), "b", 2).unwrap();
         exchange_updates(&[&d1, &d2]);
 
         let actual = array1.to_json(&d1.transact());
@@ -903,8 +911,12 @@ mod test {
         let xml1 = d1.get_or_insert_xml_element("undefined");
 
         let mut mgr = UndoManager::new(&d1, &xml1);
-        let child = xml1.insert(&mut d1.transact_mut(), 0, XmlElementPrelim::empty("p"));
-        let text_child = child.insert(&mut d1.transact_mut(), 0, XmlTextPrelim::new("content"));
+        let child = xml1
+            .insert(&mut d1.transact_mut(), 0, XmlElementPrelim::empty("p"))
+            .unwrap();
+        let text_child = child
+            .insert(&mut d1.transact_mut(), 0, XmlTextPrelim::new("content"))
+            .unwrap();
 
         assert_eq!(
             xml1.get_string(&d1.transact()),
@@ -932,7 +944,7 @@ mod test {
             xml1.get_string(&d1.transact()),
             "<undefined><p>con<bold>tent</bold></p></undefined>"
         );
-        xml1.remove_range(&mut d1.transact_mut(), 0, 1);
+        xml1.remove_range(&mut d1.transact_mut(), 0, 1).unwrap();
         assert_eq!(xml1.get_string(&d1.transact()), "<undefined></undefined>");
         mgr.undo().unwrap();
         assert_eq!(
@@ -971,7 +983,7 @@ mod test {
             }
         });
 
-        txt.insert(&mut doc.transact_mut(), 0, "abc");
+        txt.insert(&mut doc.transact_mut(), 0, "abc").unwrap();
         mgr.undo().unwrap();
         assert_eq!(result.load(Ordering::SeqCst), 1);
         mgr.redo().unwrap();
@@ -986,15 +998,19 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let arr2 = d2.get_or_insert_array("array");
 
-        let map1a = arr1.push_back(
-            &mut d1.transact_mut(),
-            MapPrelim::from([("hello".to_owned(), "world".to_owned())]),
-        );
+        let map1a = arr1
+            .push_back(
+                &mut d1.transact_mut(),
+                MapPrelim::from([("hello".to_owned(), "world".to_owned())]),
+            )
+            .unwrap();
 
-        let map1b = arr1.push_back(
-            &mut d1.transact_mut(),
-            MapPrelim::from([("key".to_owned(), "value".to_owned())]),
-        );
+        let map1b = arr1
+            .push_back(
+                &mut d1.transact_mut(),
+                MapPrelim::from([("key".to_owned(), "value".to_owned())]),
+            )
+            .unwrap();
 
         exchange_updates(&[&d1, &d2]);
 
@@ -1004,24 +1020,29 @@ mod test {
         let mut mgr2 = UndoManager::new(&d2, &arr2);
         mgr2.include_origin(d2.client_id());
 
-        map1b.insert(
-            &mut d1.transact_mut_with(d1.client_id()),
-            "key",
-            "value modified",
-        );
+        map1b
+            .insert(
+                &mut d1.transact_mut_with(d1.client_id()),
+                "key",
+                "value modified",
+            )
+            .unwrap();
 
         exchange_updates(&[&d1, &d2]);
         mgr1.reset();
 
-        map1a.insert(
-            &mut d1.transact_mut_with(d1.client_id()),
-            "hello",
-            "world modified",
-        );
+        map1a
+            .insert(
+                &mut d1.transact_mut_with(d1.client_id()),
+                "hello",
+                "world modified",
+            )
+            .unwrap();
 
         exchange_updates(&[&d1, &d2]);
 
-        arr2.remove_range(&mut d2.transact_mut_with(d2.client_id()), 0, 1);
+        arr2.remove_range(&mut d2.transact_mut_with(d2.client_id()), 0, 1)
+            .unwrap();
 
         exchange_updates(&[&d1, &d2]);
         mgr2.undo().unwrap();
@@ -1049,14 +1070,16 @@ mod test {
         });
         {
             let mut txn = doc.transact_mut();
-            design.insert(
-                &mut txn,
-                "text",
-                MapPrelim::from([(
-                    "blocks",
-                    MapPrelim::from([("text", "Type something".to_owned())]),
-                )]),
-            );
+            design
+                .insert(
+                    &mut txn,
+                    "text",
+                    MapPrelim::from([(
+                        "blocks",
+                        MapPrelim::from([("text", "Type something".to_owned())]),
+                    )]),
+                )
+                .unwrap();
         }
         let text = design
             .get(&doc.transact(), "text")
@@ -1066,7 +1089,8 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            text.insert(&mut txn, "blocks", MapPrelim::from([("text", "Something")]));
+            text.insert(&mut txn, "blocks", MapPrelim::from([("text", "Something")]))
+                .unwrap();
         }
 
         {
@@ -1075,7 +1099,8 @@ mod test {
                 &mut txn,
                 "blocks",
                 MapPrelim::from([("text", "Something else")]),
-            );
+            )
+            .unwrap();
         }
 
         assert_eq!(
@@ -1128,20 +1153,21 @@ mod test {
                 ("x".to_owned(), 0.into()),
                 ("y".to_owned(), 0.into()),
             ])),
-        );
+        )
+        .unwrap();
         let point = root.get(&doc.transact(), "a").unwrap().to_ymap().unwrap();
         mgr.reset();
 
-        point.insert(&mut doc.transact_mut(), "x", 100);
-        point.insert(&mut doc.transact_mut(), "y", 100);
+        point.insert(&mut doc.transact_mut(), "x", 100).unwrap();
+        point.insert(&mut doc.transact_mut(), "y", 100).unwrap();
         mgr.reset();
 
-        point.insert(&mut doc.transact_mut(), "x", 200);
-        point.insert(&mut doc.transact_mut(), "y", 200);
+        point.insert(&mut doc.transact_mut(), "x", 200).unwrap();
+        point.insert(&mut doc.transact_mut(), "y", 200).unwrap();
         mgr.reset();
 
-        point.insert(&mut doc.transact_mut(), "x", 300);
-        point.insert(&mut doc.transact_mut(), "y", 300);
+        point.insert(&mut doc.transact_mut(), "x", 300).unwrap();
+        point.insert(&mut doc.transact_mut(), "y", 300).unwrap();
         mgr.reset();
 
         let actual = point.to_json(&doc.transact());
@@ -1196,24 +1222,26 @@ mod test {
         // create element
         {
             let mut txn = doc.transact_mut_with(ORIGIN.clone());
-            let e = f.insert(&mut txn, 0, XmlElementPrelim::empty("test-node"));
-            e.insert_attribute(&mut txn, "a", "100");
-            e.insert_attribute(&mut txn, "b", "0");
+            let e = f
+                .insert(&mut txn, 0, XmlElementPrelim::empty("test-node"))
+                .unwrap();
+            e.insert_attribute(&mut txn, "a", "100").unwrap();
+            e.insert_attribute(&mut txn, "b", "0").unwrap();
         }
 
         // change one attribute
         {
             let mut txn = doc.transact_mut_with(ORIGIN.clone());
             let e: XmlElementRef = f.get(&txn, 0).unwrap().try_into().unwrap();
-            e.insert_attribute(&mut txn, "a", "200");
+            e.insert_attribute(&mut txn, "a", "200").unwrap();
         }
 
         // change both attributes
         {
             let mut txn = doc.transact_mut_with(ORIGIN.clone());
             let e: XmlElementRef = f.get(&txn, 0).unwrap().try_into().unwrap();
-            e.insert_attribute(&mut txn, "a", "180");
-            e.insert_attribute(&mut txn, "b", "50");
+            e.insert_attribute(&mut txn, "a", "180").unwrap();
+            e.insert_attribute(&mut txn, "b", "50").unwrap();
         }
 
         mgr.undo().unwrap();
@@ -1248,14 +1276,16 @@ mod test {
         });
         let text = {
             let mut txn = doc.transact_mut();
-            design.insert(
-                &mut txn,
-                "text",
-                MapPrelim::from([(
-                    "blocks",
-                    MapPrelim::from([("text".to_owned(), "1".to_owned())]),
-                )]),
-            )
+            design
+                .insert(
+                    &mut txn,
+                    "text",
+                    MapPrelim::from([(
+                        "blocks",
+                        MapPrelim::from([("text".to_owned(), "1".to_owned())]),
+                    )]),
+                )
+                .unwrap()
         };
         {
             let mut txn = doc.transact_mut();
@@ -1263,7 +1293,8 @@ mod test {
                 &mut txn,
                 "blocks",
                 MapPrelim::from([("text".to_owned(), "1".to_owned())]),
-            );
+            )
+            .unwrap();
         }
         {
             let mut txn = doc.transact_mut();
@@ -1271,7 +1302,8 @@ mod test {
                 &mut txn,
                 "blocks",
                 MapPrelim::from([("text".to_owned(), "3".to_owned())]),
-            );
+            )
+            .unwrap();
         }
         {
             let mut txn = doc.transact_mut();
@@ -1279,7 +1311,8 @@ mod test {
                 &mut txn,
                 "blocks",
                 MapPrelim::from([("text".to_owned(), "4".to_owned())]),
-            );
+            )
+            .unwrap();
         }
         // {"text":{"blocks":{"text":"4"}}}
         mgr.undo().unwrap(); // {"text":{"blocks":{"3"}}}
@@ -1316,7 +1349,8 @@ mod test {
             &mut doc1.transact_mut(),
             0,
             "Attack ships on fire off the shoulder of Orion.",
-        ); // D1: 'Attack ships on fire off the shoulder of Orion.'
+        )
+        .unwrap(); // D1: 'Attack ships on fire off the shoulder of Orion.'
         let doc2 = Doc::with_client_id(2);
         let txt2 = doc2.get_or_insert_text("test");
 
@@ -1368,9 +1402,11 @@ mod test {
         mgr.include_origin(ORIGIN.clone());
         {
             let mut txn = doc.transact_mut();
-            let e = f.insert(&mut txn, 0, XmlElementPrelim::empty("test"));
-            e.insert_attribute(&mut txn, "a", "1");
-            e.insert_attribute(&mut txn, "b", "2");
+            let e = f
+                .insert(&mut txn, 0, XmlElementPrelim::empty("test"))
+                .unwrap();
+            e.insert_attribute(&mut txn, "a", "1").unwrap();
+            e.insert_attribute(&mut txn, "b", "2").unwrap();
         }
         let s = f.get_string(&doc.transact());
         assert!(s == r#"<test a="1" b="2"></test>"# || s == r#"<test b="2" a="1"></test>"#);
@@ -1378,8 +1414,8 @@ mod test {
             // change attribute "b" and delete test-node
             let mut txn = doc.transact_mut_with(ORIGIN);
             let e: XmlElementRef = f.get(&txn, 0).unwrap().try_into().unwrap();
-            e.insert_attribute(&mut txn, "b", "3");
-            f.remove_range(&mut txn, 0, 1);
+            e.insert_attribute(&mut txn, "b", "3").unwrap();
+            f.remove_range(&mut txn, 0, 1).unwrap();
         }
         assert_eq!(f.get_string(&doc.transact()), "");
 
@@ -1398,12 +1434,14 @@ mod test {
         let txt2 = d2.get_or_insert_text("test");
 
         let attrs = Attrs::from([("bold".into(), true.into())]);
-        let nested = txt1.insert_embed_with_attributes(
-            &mut d1.transact_mut(),
-            0,
-            TextPrelim::new("initial text"),
-            attrs,
-        );
+        let nested = txt1
+            .insert_embed_with_attributes(
+                &mut d1.transact_mut(),
+                0,
+                TextPrelim::new("initial text"),
+                attrs,
+            )
+            .unwrap();
         assert_eq!(
             nested.get_string(&d1.transact()),
             "initial text".to_string()
@@ -1414,7 +1452,9 @@ mod test {
             let len = nested.len(&txn);
             nested.remove_range(&mut txn, 0, len);
         }
-        nested.insert(&mut d1.transact_mut(), 0, "other text");
+        nested
+            .insert(&mut d1.transact_mut(), 0, "other text")
+            .unwrap();
         assert_eq!(nested.get_string(&d1.transact()), "other text".to_string());
         mgr.undo().unwrap();
         assert_eq!(

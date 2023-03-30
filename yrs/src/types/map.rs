@@ -458,8 +458,8 @@ mod test {
         let m2 = d2.get_or_insert_map("map");
         let mut t2 = d2.transact_mut();
 
-        m1.insert(&mut t1, "number".to_owned(), 1);
-        m1.insert(&mut t1, "string".to_owned(), "hello Y");
+        m1.insert(&mut t1, "number".to_owned(), 1).unwrap();
+        m1.insert(&mut t1, "string".to_owned(), "hello Y").unwrap();
         m1.insert(&mut t1, "object".to_owned(), {
             let mut v = HashMap::new();
             v.insert("key2".to_owned(), "value");
@@ -467,9 +467,10 @@ mod test {
             let mut map = HashMap::new();
             map.insert("key".to_owned(), v);
             map // { key: { key2: 'value' } }
-        });
-        m1.insert(&mut t1, "boolean1".to_owned(), true);
-        m1.insert(&mut t1, "boolean0".to_owned(), false);
+        })
+        .unwrap();
+        m1.insert(&mut t1, "boolean1".to_owned(), true).unwrap();
+        m1.insert(&mut t1, "boolean0".to_owned(), false).unwrap();
 
         //let m1m = t1.get_map("y-map");
         //let m1a = t1.get_text("y-text");
@@ -513,8 +514,9 @@ mod test {
         let m1 = d1.get_or_insert_map("map");
         let mut t1 = d1.transact_mut();
 
-        m1.insert(&mut t1, "stuff".to_owned(), "stuffy");
-        m1.insert(&mut t1, "null".to_owned(), None as Option<String>);
+        m1.insert(&mut t1, "stuff".to_owned(), "stuffy").unwrap();
+        m1.insert(&mut t1, "null".to_owned(), None as Option<String>)
+            .unwrap();
 
         let update = t1
             .encode_state_as_update_v1(&StateVector::default())
@@ -543,8 +545,8 @@ mod test {
         let m2 = d2.get_or_insert_map("map");
         let mut t2 = d2.transact_mut();
 
-        m1.insert(&mut t1, "stuff".to_owned(), "c0");
-        m2.insert(&mut t2, "stuff".to_owned(), "c1");
+        m1.insert(&mut t1, "stuff".to_owned(), "c0").unwrap();
+        m2.insert(&mut t2, "stuff".to_owned(), "c1").unwrap();
 
         let u1 = t1
             .encode_state_as_update_v1(&StateVector::default())
@@ -569,8 +571,8 @@ mod test {
         let key1 = "stuff".to_owned();
         let key2 = "other-stuff".to_owned();
 
-        m1.insert(&mut t1, key1.clone(), "c0");
-        m1.insert(&mut t1, key2.clone(), "c1");
+        m1.insert(&mut t1, key1.clone(), "c0").unwrap();
+        m1.insert(&mut t1, key2.clone(), "c1").unwrap();
         assert_eq!(m1.len(&t1), 2);
 
         // remove 'stuff'
@@ -592,8 +594,8 @@ mod test {
         let m1 = d1.get_or_insert_map("map");
         let mut t1 = d1.transact_mut();
 
-        m1.insert(&mut t1, "key1".to_owned(), "c0");
-        m1.insert(&mut t1, "key2".to_owned(), "c1");
+        m1.insert(&mut t1, "key1".to_owned(), "c0").unwrap();
+        m1.insert(&mut t1, "key2".to_owned(), "c1").unwrap();
         m1.clear(&mut t1);
 
         assert_eq!(m1.len(&t1), 0);
@@ -630,10 +632,10 @@ mod test {
             let mut t2 = d2.transact_mut();
             let mut t3 = d3.transact_mut();
 
-            m1.insert(&mut t1, "key1".to_owned(), "c0");
-            m2.insert(&mut t2, "key1".to_owned(), "c1");
-            m2.insert(&mut t2, "key1".to_owned(), "c2");
-            m3.insert(&mut t3, "key1".to_owned(), "c3");
+            m1.insert(&mut t1, "key1".to_owned(), "c0").unwrap();
+            m2.insert(&mut t2, "key1".to_owned(), "c1").unwrap();
+            m2.insert(&mut t2, "key1".to_owned(), "c2").unwrap();
+            m3.insert(&mut t3, "key1".to_owned(), "c3").unwrap();
         }
 
         exchange_updates(&[&d1, &d2, &d3, &d4]);
@@ -647,10 +649,10 @@ mod test {
             let mut t2 = d2.transact_mut();
             let mut t3 = d3.transact_mut();
 
-            m1.insert(&mut t1, "key2".to_owned(), "c0");
-            m2.insert(&mut t2, "key2".to_owned(), "c1");
-            m2.insert(&mut t2, "key2".to_owned(), "c2");
-            m3.insert(&mut t3, "key2".to_owned(), "c3");
+            m1.insert(&mut t1, "key2".to_owned(), "c0").unwrap();
+            m2.insert(&mut t2, "key2".to_owned(), "c1").unwrap();
+            m2.insert(&mut t2, "key2".to_owned(), "c2").unwrap();
+            m3.insert(&mut t3, "key2".to_owned(), "c3").unwrap();
             m3.clear(&mut t3);
         }
 
@@ -695,10 +697,10 @@ mod test {
             let mut t2 = d2.transact_mut();
             let mut t3 = d3.transact_mut();
 
-            m1.insert(&mut t1, "stuff".to_owned(), "c0");
-            m2.insert(&mut t2, "stuff".to_owned(), "c1");
-            m2.insert(&mut t2, "stuff".to_owned(), "c2");
-            m3.insert(&mut t3, "stuff".to_owned(), "c3");
+            m1.insert(&mut t1, "stuff".to_owned(), "c0").unwrap();
+            m2.insert(&mut t2, "stuff".to_owned(), "c1").unwrap();
+            m2.insert(&mut t2, "stuff".to_owned(), "c2").unwrap();
+            m3.insert(&mut t3, "stuff".to_owned(), "c3").unwrap();
         }
 
         exchange_updates(&[&d1, &d2, &d3]);
@@ -731,10 +733,10 @@ mod test {
             let mut t2 = d2.transact_mut();
             let mut t3 = d3.transact_mut();
 
-            m1.insert(&mut t1, "key1".to_owned(), "c0");
-            m2.insert(&mut t2, "key1".to_owned(), "c1");
-            m2.insert(&mut t2, "key1".to_owned(), "c2");
-            m3.insert(&mut t3, "key1".to_owned(), "c3");
+            m1.insert(&mut t1, "key1".to_owned(), "c0").unwrap();
+            m2.insert(&mut t2, "key1".to_owned(), "c1").unwrap();
+            m2.insert(&mut t2, "key1".to_owned(), "c2").unwrap();
+            m3.insert(&mut t3, "key1".to_owned(), "c3").unwrap();
         }
 
         exchange_updates(&[&d1, &d2, &d3, &d4]);
@@ -750,10 +752,10 @@ mod test {
             let mut t3 = d3.transact_mut();
             let mut t4 = d4.transact_mut();
 
-            m1.insert(&mut t1, "key1".to_owned(), "deleteme");
-            m2.insert(&mut t2, "key1".to_owned(), "c1");
-            m3.insert(&mut t3, "key1".to_owned(), "c2");
-            m4.insert(&mut t4, "key1".to_owned(), "c3");
+            m1.insert(&mut t1, "key1".to_owned(), "deleteme").unwrap();
+            m2.insert(&mut t2, "key1".to_owned(), "c1").unwrap();
+            m3.insert(&mut t3, "key1".to_owned(), "c2").unwrap();
+            m4.insert(&mut t4, "key1".to_owned(), "c3").unwrap();
             m4.remove(&mut t4, &"key1".to_owned());
         }
 
@@ -786,7 +788,7 @@ mod test {
         // insert new entry
         {
             let mut txn = d1.transact_mut();
-            m1.insert(&mut txn, "a", 1);
+            m1.insert(&mut txn, "a", 1).unwrap();
             // txn is committed at the end of this scope
         }
         assert_eq!(
@@ -800,7 +802,7 @@ mod test {
         // update existing entry once
         {
             let mut txn = d1.transact_mut();
-            m1.insert(&mut txn, "a", 2);
+            m1.insert(&mut txn, "a", 2).unwrap();
         }
         assert_eq!(
             entries.take(),
@@ -813,8 +815,8 @@ mod test {
         // update existing entry twice
         {
             let mut txn = d1.transact_mut();
-            m1.insert(&mut txn, "a", 3);
-            m1.insert(&mut txn, "a", 4);
+            m1.insert(&mut txn, "a", 3).unwrap();
+            m1.insert(&mut txn, "a", 4).unwrap();
         }
         assert_eq!(
             entries.take(),
@@ -840,8 +842,8 @@ mod test {
         // add another entry and update it
         {
             let mut txn = d1.transact_mut();
-            m1.insert(&mut txn, "b", 1);
-            m1.insert(&mut txn, "b", 2);
+            m1.insert(&mut txn, "b", 1).unwrap();
+            m1.insert(&mut txn, "b", 2).unwrap();
         }
         assert_eq!(
             entries.take(),
@@ -854,7 +856,7 @@ mod test {
         // add and remove an entry
         {
             let mut txn = d1.transact_mut();
-            m1.insert(&mut txn, "c", 1);
+            m1.insert(&mut txn, "c", 1).unwrap();
             m1.remove(&mut txn, "c");
         }
         assert_eq!(entries.take(), Some(HashMap::new()));
@@ -902,7 +904,7 @@ mod test {
             let mut txn = doc.transact_mut();
             let key = ["one", "two"].choose(rng).unwrap();
             let value: String = random_string(rng);
-            map.insert(&mut txn, key.to_string(), value);
+            map.insert(&mut txn, key.to_string(), value).unwrap();
         }
 
         fn set_type(doc: &mut Doc, rng: &mut StdRng) {
@@ -914,9 +916,11 @@ mod test {
                     &mut txn,
                     key.to_string(),
                     ArrayPrelim::from(vec![1, 2, 3, 4]),
-                );
+                )
+                .unwrap();
             } else if rng.gen_bool(0.33) {
-                map.insert(&mut txn, key.to_string(), TextPrelim::new("deeptext"));
+                map.insert(&mut txn, key.to_string(), TextPrelim::new("deeptext"))
+                    .unwrap();
             } else {
                 map.insert(
                     &mut txn,
@@ -926,7 +930,8 @@ mod test {
                         map.insert("deepkey".to_owned(), "deepvalue");
                         map
                     }),
-                );
+                )
+                .unwrap();
             }
         }
 
@@ -965,21 +970,29 @@ mod test {
             *count += 1;
         });
 
-        let nested = map.insert(&mut doc.transact_mut(), "map", MapPrelim::<String>::new());
-        nested.insert(
-            &mut doc.transact_mut(),
-            "array",
-            ArrayPrelim::from(Vec::<String>::default()),
-        );
+        let nested = map
+            .insert(&mut doc.transact_mut(), "map", MapPrelim::<String>::new())
+            .unwrap();
+        nested
+            .insert(
+                &mut doc.transact_mut(),
+                "array",
+                ArrayPrelim::from(Vec::<String>::default()),
+            )
+            .unwrap();
         let nested2 = nested
             .get(&nested.transact(), "array")
             .unwrap()
             .to_yarray()
             .unwrap();
-        nested2.insert(&mut doc.transact_mut(), 0, "content");
+        nested2
+            .insert(&mut doc.transact_mut(), 0, "content")
+            .unwrap();
 
-        let nested_text = nested.insert(&mut doc.transact_mut(), "text", TextPrelim::new("text"));
-        nested_text.push(&mut doc.transact_mut(), "!");
+        let nested_text = nested
+            .insert(&mut doc.transact_mut(), "text", TextPrelim::new("text"))
+            .unwrap();
+        nested_text.push(&mut doc.transact_mut(), "!").unwrap();
 
         assert_eq!(*calls.borrow().deref(), 5);
         let actual = paths.borrow();
@@ -1018,7 +1031,7 @@ mod test {
                 let doc = d2.write().unwrap();
                 let map = doc.get_or_insert_map("test");
                 let mut txn = doc.transact_mut();
-                map.insert(&mut txn, "key", 1);
+                map.insert(&mut txn, "key", 1).unwrap();
             }
         });
 
@@ -1031,7 +1044,7 @@ mod test {
                 let doc = d3.write().unwrap();
                 let map = doc.get_or_insert_map("test");
                 let mut txn = doc.transact_mut();
-                map.insert(&mut txn, "key", 2);
+                map.insert(&mut txn, "key", 2).unwrap();
             }
         });
 

@@ -825,11 +825,11 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            txt.insert(&mut txn, 0, "1");
-            txt.insert(&mut txn, 0, "abc");
-            txt.insert(&mut txn, 0, "z");
-            txt.insert(&mut txn, 0, "y");
-            txt.insert(&mut txn, 0, "x");
+            txt.insert(&mut txn, 0, "1").unwrap();
+            txt.insert(&mut txn, 0, "abc").unwrap();
+            txt.insert(&mut txn, 0, "z").unwrap();
+            txt.insert(&mut txn, 0, "y").unwrap();
+            txt.insert(&mut txn, 0, "x").unwrap();
         }
 
         check_sticky_indexes(&txt);
@@ -840,7 +840,7 @@ mod test {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
-        txt.insert(&mut doc.transact_mut(), 0, "abc");
+        txt.insert(&mut doc.transact_mut(), 0, "abc").unwrap();
         check_sticky_indexes(&txt);
     }
 
@@ -851,9 +851,9 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            txt.insert(&mut txn, 0, "abc");
-            txt.insert(&mut txn, 0, "1");
-            txt.insert(&mut txn, 0, "xyz");
+            txt.insert(&mut txn, 0, "abc").unwrap();
+            txt.insert(&mut txn, 0, "1").unwrap();
+            txt.insert(&mut txn, 0, "xyz").unwrap();
         }
 
         check_sticky_indexes(&txt);
@@ -864,7 +864,7 @@ mod test {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
-        txt.insert(&mut doc.transact_mut(), 0, "1");
+        txt.insert(&mut doc.transact_mut(), 0, "1").unwrap();
         check_sticky_indexes(&txt);
     }
 
@@ -875,8 +875,8 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            txt.insert(&mut txn, 0, "2");
-            txt.insert(&mut txn, 0, "1");
+            txt.insert(&mut txn, 0, "2").unwrap();
+            txt.insert(&mut txn, 0, "1").unwrap();
         }
 
         check_sticky_indexes(&txt);
@@ -895,13 +895,13 @@ mod test {
         let txt = doc.get_or_insert_text("test");
 
         let mut txn = doc.transact_mut();
-        txt.insert(&mut txn, 0, "2");
-        txt.insert(&mut txn, 0, "1");
+        txt.insert(&mut txn, 0, "2").unwrap();
+        txt.insert(&mut txn, 0, "1").unwrap();
 
         let rpos_right = txt.sticky_index(&mut txn, 1, Assoc::After).unwrap();
         let rpos_left = txt.sticky_index(&mut txn, 1, Assoc::Before).unwrap();
 
-        txt.insert(&mut txn, 1, "x");
+        txt.insert(&mut txn, 1, "x").unwrap();
 
         let pos_right = rpos_right.get_offset(&txn).unwrap();
         let pos_left = rpos_left.get_offset(&txn).unwrap();

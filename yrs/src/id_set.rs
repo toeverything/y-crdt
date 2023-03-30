@@ -837,12 +837,12 @@ mod test {
         let d2 = Doc::with_options(o);
         let t2 = d2.get_or_insert_text("test");
 
-        t1.insert(&mut d1.transact_mut(), 0, "aaaaa");
-        t1.insert(&mut d1.transact_mut(), 0, "bbb");
+        t1.insert(&mut d1.transact_mut(), 0, "aaaaa").unwrap();
+        t1.insert(&mut d1.transact_mut(), 0, "bbb").unwrap();
 
         exchange_updates(&[&d1, &d2]);
 
-        t2.insert(&mut d2.transact_mut(), 4, "cccc");
+        t2.insert(&mut d2.transact_mut(), 4, "cccc").unwrap();
 
         exchange_updates(&[&d1, &d2]);
 
@@ -888,7 +888,7 @@ mod test {
         let mut ds = DeleteSet::new();
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
-        txt.push(&mut doc.transact_mut(), "testab");
+        txt.push(&mut doc.transact_mut(), "testab").unwrap();
         ds.insert(ID::new(1, 5), 1);
         let mut txn = doc.transact_mut();
         let mut i = ds.deleted_blocks(&mut txn);

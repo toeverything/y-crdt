@@ -1221,13 +1221,12 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        Doc, GetString, Observable, Options, StateVector, Text, Transact, Update, XmlElementPrelim,
+        Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
         XmlTextPrelim,
     };
     use lib0::any::Any;
     use std::cell::RefCell;
     use std::collections::HashMap;
-    use std::io::Cursor;
     use std::rc::Rc;
 
     #[test]
@@ -1235,14 +1234,19 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let f = d1.get_or_insert_xml_fragment("xml");
         let mut t1 = d1.transact_mut();
-        let xml1 = f.push_back(&mut t1, XmlElementPrelim::empty("div"));
-        xml1.insert_attribute(&mut t1, "height", 10.to_string());
+        let xml1 = f
+            .push_back(&mut t1, XmlElementPrelim::empty("div"))
+            .unwrap();
+        xml1.insert_attribute(&mut t1, "height", 10.to_string())
+            .unwrap();
         assert_eq!(xml1.get_attribute(&t1, "height"), Some("10".to_string()));
 
         let d2 = Doc::with_client_id(1);
         let f = d2.get_or_insert_xml_fragment("xml");
         let mut t2 = d2.transact_mut();
-        let xml2 = f.push_back(&mut t2, XmlElementPrelim::empty("div"));
+        let xml2 = f
+            .push_back(&mut t2, XmlElementPrelim::empty("div"))
+            .unwrap();
         let u = t1
             .encode_state_as_update_v1(&StateVector::default())
             .unwrap();
@@ -1262,11 +1266,16 @@ mod test {
                 <img/>
             </UNDEFINED>
         */
-        let p1 = root.push_back(&mut txn, XmlElementPrelim::empty("p"));
-        p1.push_back(&mut txn, XmlTextPrelim::new(""));
-        p1.push_back(&mut txn, XmlTextPrelim::new(""));
-        let p2 = root.push_back(&mut txn, XmlElementPrelim::empty("p"));
-        root.push_back(&mut txn, XmlElementPrelim::empty("img"));
+        let p1 = root
+            .push_back(&mut txn, XmlElementPrelim::empty("p"))
+            .unwrap();
+        p1.push_back(&mut txn, XmlTextPrelim::new("")).unwrap();
+        p1.push_back(&mut txn, XmlTextPrelim::new("")).unwrap();
+        let p2 = root
+            .push_back(&mut txn, XmlElementPrelim::empty("p"))
+            .unwrap();
+        root.push_back(&mut txn, XmlElementPrelim::empty("img"))
+            .unwrap();
 
         let all_paragraphs = root.successors(&txn).filter_map(|n| match n {
             XmlNode::Element(e) if e.tag() == "p" => Some(e),
@@ -1288,8 +1297,9 @@ mod test {
         let doc = Doc::with_client_id(1);
         let f = doc.get_or_insert_xml_fragment("test");
         let mut txn = doc.transact_mut();
-        let txt = f.push_back(&mut txn, XmlTextPrelim::new(""));
-        txt.insert_attribute(&mut txn, "test", 42.to_string());
+        let txt = f.push_back(&mut txn, XmlTextPrelim::new("")).unwrap();
+        txt.insert_attribute(&mut txn, "test", 42.to_string())
+            .unwrap();
 
         assert_eq!(txt.get_attribute(&txn, "test"), Some("42".to_string()));
         let actual: Vec<_> = txt.attributes(&txn).collect();
@@ -1301,8 +1311,12 @@ mod test {
         let doc = Doc::with_client_id(1);
         let root = doc.get_or_insert_xml_fragment("root");
         let mut txn = doc.transact_mut();
-        let first = root.push_back(&mut txn, XmlTextPrelim::new("hello"));
-        let second = root.push_back(&mut txn, XmlElementPrelim::empty("p"));
+        let first = root
+            .push_back(&mut txn, XmlTextPrelim::new("hello"))
+            .unwrap();
+        let second = root
+            .push_back(&mut txn, XmlElementPrelim::empty("p"))
+            .unwrap();
 
         assert_eq!(
             first.siblings(&txn).next().as_ref(),
@@ -1333,7 +1347,7 @@ mod test {
         let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
         let _first = r1.push_back(&mut t1, XmlTextPrelim::new("hello"));
-        r1.push_back(&mut t1, XmlElementPrelim::empty("p"));
+        r1.push_back(&mut t1, XmlElementPrelim::empty("p")).unwrap();
 
         let expected = "hello<p></p>";
         assert_eq!(r1.get_string(&t1), expected);
@@ -1356,7 +1370,7 @@ mod test {
         let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
         let _first = r1.push_back(&mut t1, XmlTextPrelim::new("hello"));
-        r1.push_back(&mut t1, XmlElementPrelim::empty("p"));
+        r1.push_back(&mut t1, XmlElementPrelim::empty("p")).unwrap();
 
         /* This binary is result of following Yjs code (matching Rust code above):
         ```js
@@ -1397,8 +1411,8 @@ mod test {
         // insert attribute
         {
             let mut txn = d1.transact_mut();
-            xml.insert_attribute(&mut txn, "key1", "value1");
-            xml.insert_attribute(&mut txn, "key2", "value2");
+            xml.insert_attribute(&mut txn, "key1", "value1").unwrap();
+            xml.insert_attribute(&mut txn, "key2", "value2").unwrap();
         }
         assert!(nodes.borrow_mut().take().unwrap().is_empty());
         assert_eq!(
@@ -1418,7 +1432,7 @@ mod test {
         // change and remove attribute
         {
             let mut txn = d1.transact_mut();
-            xml.insert_attribute(&mut txn, "key1", "value11");
+            xml.insert_attribute(&mut txn, "key1", "value11").unwrap();
             xml.remove_attribute(&mut txn, &"key2");
         }
         assert!(nodes.borrow_mut().take().unwrap().is_empty());
@@ -1442,8 +1456,10 @@ mod test {
         // add xml elements
         let (nested_txt, nested_xml) = {
             let mut txn = d1.transact_mut();
-            let txt = xml.insert(&mut txn, 0, XmlTextPrelim::new(""));
-            let xml2 = xml.insert(&mut txn, 1, XmlElementPrelim::empty("div"));
+            let txt = xml.insert(&mut txn, 0, XmlTextPrelim::new("")).unwrap();
+            let xml2 = xml
+                .insert(&mut txn, 1, XmlElementPrelim::empty("div"))
+                .unwrap();
             (txt, xml2)
         };
         assert_eq!(
@@ -1458,8 +1474,9 @@ mod test {
         // remove and add
         let nested_xml2 = {
             let mut txn = d1.transact_mut();
-            xml.remove_range(&mut txn, 1, 1);
+            xml.remove_range(&mut txn, 1, 1).unwrap();
             xml.insert(&mut txn, 1, XmlElementPrelim::empty("p"))
+                .unwrap()
         };
         assert_eq!(
             nodes.borrow_mut().take(),
@@ -1513,9 +1530,13 @@ mod test {
         let doc = Doc::new();
         let f = doc.get_or_insert_xml_fragment("test");
         let mut txn = doc.transact_mut();
-        let div = f.push_back(&mut txn, XmlElementPrelim::empty("div"));
-        div.insert_attribute(&mut txn, "class", "t-button");
-        let text = div.push_back(&mut txn, XmlTextPrelim::new("hello world"));
+        let div = f
+            .push_back(&mut txn, XmlElementPrelim::empty("div"))
+            .unwrap();
+        div.insert_attribute(&mut txn, "class", "t-button").unwrap();
+        let text = div
+            .push_back(&mut txn, XmlTextPrelim::new("hello world"))
+            .unwrap();
         text.format(
             &mut txn,
             6,
@@ -1543,8 +1564,9 @@ mod test {
         let bold = Attrs::from([("b".into(), true.into())]);
         let italic = Attrs::from([("i".into(), true.into())]);
 
-        xml.insert(&mut txn, 0, "hello ");
-        xml.insert_with_attributes(&mut txn, 6, "world", italic);
+        xml.insert(&mut txn, 0, "hello ").unwrap();
+        xml.insert_with_attributes(&mut txn, 6, "world", italic)
+            .unwrap();
         xml.format(&mut txn, 0, 5, bold);
 
         assert_eq!(xml.get_string(&txn), "<b>hello</b> <i>world</i>");

@@ -550,9 +550,9 @@ mod test {
         let a = doc.get_or_insert_array("array");
         let mut txn = doc.transact_mut();
 
-        a.push_back(&mut txn, "a");
-        a.push_back(&mut txn, "b");
-        a.push_back(&mut txn, "c");
+        a.push_back(&mut txn, "a").unwrap();
+        a.push_back(&mut txn, "b").unwrap();
+        a.push_back(&mut txn, "c").unwrap();
 
         let actual: Vec<_> = a.iter(&txn).collect();
         assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
@@ -564,9 +564,9 @@ mod test {
         let a = doc.get_or_insert_array("array");
         let mut txn = doc.transact_mut();
 
-        a.push_front(&mut txn, "c");
-        a.push_front(&mut txn, "b");
-        a.push_front(&mut txn, "a");
+        a.push_front(&mut txn, "c").unwrap();
+        a.push_front(&mut txn, "b").unwrap();
+        a.push_front(&mut txn, "a").unwrap();
 
         let actual: Vec<_> = a.iter(&txn).collect();
         assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
@@ -578,9 +578,9 @@ mod test {
         let a = doc.get_or_insert_array("array");
         let mut txn = doc.transact_mut();
 
-        a.insert(&mut txn, 0, "a");
-        a.insert(&mut txn, 1, "c");
-        a.insert(&mut txn, 1, "b");
+        a.insert(&mut txn, 0, "a").unwrap();
+        a.insert(&mut txn, 1, "c").unwrap();
+        a.insert(&mut txn, 1, "b").unwrap();
 
         let actual: Vec<_> = a.iter(&txn).collect();
         assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
@@ -593,7 +593,7 @@ mod test {
 
         let a1 = d1.get_or_insert_array("array");
 
-        a1.insert(&mut d1.transact_mut(), 0, "Hi");
+        a1.insert(&mut d1.transact_mut(), 0, "Hi").unwrap();
         let update = d1
             .transact()
             .encode_state_as_update_v1(&StateVector::default())
@@ -615,38 +615,38 @@ mod test {
         {
             let mut txn = d.transact_mut();
 
-            a.push_back(&mut txn, 0); // len: 1
-            a.push_back(&mut txn, 1); // len: 2
-            a.push_back(&mut txn, 2); // len: 3
-            a.push_back(&mut txn, 3); // len: 4
+            a.push_back(&mut txn, 0).unwrap(); // len: 1
+            a.push_back(&mut txn, 1).unwrap(); // len: 2
+            a.push_back(&mut txn, 2).unwrap(); // len: 3
+            a.push_back(&mut txn, 3).unwrap(); // len: 4
 
-            a.remove_range(&mut txn, 0, 1); // len: 3
-            a.insert(&mut txn, 0, 0); // len: 4
+            a.remove_range(&mut txn, 0, 1).unwrap(); // len: 3
+            a.insert(&mut txn, 0, 0).unwrap(); // len: 4
 
             assert_eq!(a.len(&txn), 4);
         }
         {
             let mut txn = d.transact_mut();
-            a.remove_range(&mut txn, 1, 1); // len: 3
+            a.remove_range(&mut txn, 1, 1).unwrap(); // len: 3
             assert_eq!(a.len(&txn), 3);
 
-            a.insert(&mut txn, 1, 1); // len: 4
+            a.insert(&mut txn, 1, 1).unwrap(); // len: 4
             assert_eq!(a.len(&txn), 4);
 
-            a.remove_range(&mut txn, 2, 1); // len: 3
+            a.remove_range(&mut txn, 2, 1).unwrap(); // len: 3
             assert_eq!(a.len(&txn), 3);
 
-            a.insert(&mut txn, 2, 2); // len: 4
+            a.insert(&mut txn, 2, 2).unwrap(); // len: 4
             assert_eq!(a.len(&txn), 4);
         }
 
         let mut txn = d.transact_mut();
         assert_eq!(a.len(&txn), 4);
 
-        a.remove_range(&mut txn, 1, 1);
+        a.remove_range(&mut txn, 1, 1).unwrap();
         assert_eq!(a.len(&txn), 3);
 
-        a.insert(&mut txn, 1, 1);
+        a.insert(&mut txn, 1, 1).unwrap();
         assert_eq!(a.len(&txn), 4);
     }
 
@@ -656,8 +656,8 @@ mod test {
         let a1 = d1.get_or_insert_array("array");
 
         let mut t1 = d1.transact_mut();
-        a1.insert(&mut t1, 0, "A");
-        a1.remove_range(&mut t1, 1, 0);
+        a1.insert(&mut t1, 0, "A").unwrap();
+        a1.remove_range(&mut t1, 1, 0).unwrap();
     }
 
     #[test]
@@ -668,9 +668,9 @@ mod test {
         {
             let mut t1 = d1.transact_mut();
 
-            a1.push_back(&mut t1, 1);
-            a1.push_back(&mut t1, true);
-            a1.push_back(&mut t1, false);
+            a1.push_back(&mut t1, 1).unwrap();
+            a1.push_back(&mut t1, true).unwrap();
+            a1.push_back(&mut t1, false).unwrap();
             let actual: Vec<_> = a1.iter(&t1).collect();
             assert_eq!(
                 actual,
@@ -695,19 +695,19 @@ mod test {
         let a = d1.get_or_insert_array("array");
         {
             let mut txn = d1.transact_mut();
-            a.insert(&mut txn, 0, 0);
+            a.insert(&mut txn, 0, 0).unwrap();
         }
 
         let d2 = Doc::with_client_id(2);
         {
             let mut txn = d1.transact_mut();
-            a.insert(&mut txn, 0, 1);
+            a.insert(&mut txn, 0, 1).unwrap();
         }
 
         let d3 = Doc::with_client_id(3);
         {
             let mut txn = d1.transact_mut();
-            a.insert(&mut txn, 0, 2);
+            a.insert(&mut txn, 0, 2).unwrap();
         }
 
         exchange_updates(&[&d1, &d2, &d3]);
@@ -731,7 +731,7 @@ mod test {
         {
             let a = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
-            a.insert_range(&mut txn, 0, ["x", "y", "z"]);
+            a.insert_range(&mut txn, 0, ["x", "y", "z"]).unwrap();
         }
         let d2 = Doc::with_client_id(2);
         let d3 = Doc::with_client_id(3);
@@ -747,10 +747,10 @@ mod test {
             let mut t2 = d2.transact_mut();
             let mut t3 = d3.transact_mut();
 
-            a1.insert(&mut t1, 1, 0); // [x,0,y,z]
-            a2.remove_range(&mut t2, 0, 1); // [y,z]
-            a2.remove_range(&mut t2, 1, 1); // [y]
-            a3.insert(&mut t3, 1, 2); // [x,2,y,z]
+            a1.insert(&mut t1, 1, 0).unwrap(); // [x,0,y,z]
+            a2.remove_range(&mut t2, 0, 1).unwrap(); // [y,z]
+            a2.remove_range(&mut t2, 1, 1).unwrap(); // [y]
+            a3.insert(&mut t3, 1, 2).unwrap(); // [x,2,y,z]
         }
 
         exchange_updates(&[&d1, &d2, &d3]);
@@ -770,8 +770,8 @@ mod test {
         {
             let a = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
-            a.push_back(&mut txn, "x");
-            a.push_back(&mut txn, "y");
+            a.push_back(&mut txn, "x").unwrap();
+            a.push_back(&mut txn, "y").unwrap();
         }
         let d2 = Doc::with_client_id(2);
         let d3 = Doc::with_client_id(3);
@@ -786,9 +786,9 @@ mod test {
             let mut t2 = d2.transact_mut();
             let mut t3 = d3.transact_mut();
 
-            a1.insert(&mut t1, 1, "user0");
-            a2.insert(&mut t2, 1, "user1");
-            a3.insert(&mut t3, 1, "user2");
+            a1.insert(&mut t1, 1, "user0").unwrap();
+            a2.insert(&mut t2, 1, "user1").unwrap();
+            a3.insert(&mut t3, 1, "user2").unwrap();
         }
 
         exchange_updates(&[&d1, &d2, &d3]);
@@ -807,8 +807,8 @@ mod test {
         {
             let a = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
-            a.push_back(&mut txn, "x");
-            a.push_back(&mut txn, "y");
+            a.push_back(&mut txn, "x").unwrap();
+            a.push_back(&mut txn, "y").unwrap();
         }
         let d2 = Doc::with_client_id(2);
 
@@ -820,8 +820,8 @@ mod test {
             let mut t1 = d1.transact_mut();
             let mut t2 = d2.transact_mut();
 
-            a2.remove_range(&mut t2, 1, 1);
-            a1.remove_range(&mut t1, 0, 2);
+            a2.remove_range(&mut t2, 1, 1).unwrap();
+            a1.remove_range(&mut t1, 0, 2).unwrap();
         }
 
         exchange_updates(&[&d1, &d2]);
@@ -838,9 +838,9 @@ mod test {
         {
             let a = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
-            a.push_back(&mut txn, "x");
-            a.push_back(&mut txn, "y");
-            a.push_back(&mut txn, "z");
+            a.push_back(&mut txn, "x").unwrap();
+            a.push_back(&mut txn, "y").unwrap();
+            a.push_back(&mut txn, "z").unwrap();
         }
         let d2 = Doc::with_client_id(2);
 
@@ -850,7 +850,7 @@ mod test {
             let a2 = d2.get_or_insert_array("array");
             let mut t2 = d2.transact_mut();
 
-            a2.remove_range(&mut t2, 0, 3);
+            a2.remove_range(&mut t2, 0, 3).unwrap();
         }
 
         exchange_updates(&[&d1, &d2]);
@@ -869,7 +869,7 @@ mod test {
         for i in 0..10 {
             let mut m = HashMap::new();
             m.insert("value".to_owned(), i);
-            a.push_back(&mut txn, MapPrelim::from(m));
+            a.push_back(&mut txn, MapPrelim::from(m)).unwrap();
         }
 
         for (i, value) in a.iter(&txn).enumerate() {
@@ -894,7 +894,7 @@ mod test {
 
         {
             let mut txn = d.transact_mut();
-            array.insert_range(&mut txn, 0, [0, 1, 2]);
+            array.insert_range(&mut txn, 0, [0, 1, 2]).unwrap();
             // txn is committed at the end of this scope
         }
         assert!(
@@ -904,7 +904,7 @@ mod test {
 
         {
             let mut txn = d.transact_mut();
-            array.remove_range(&mut txn, 0, 1);
+            array.remove_range(&mut txn, 0, 1).unwrap();
             // txn is committed at the end of this scope
         }
         assert!(
@@ -914,7 +914,7 @@ mod test {
 
         {
             let mut txn = d.transact_mut();
-            array.remove_range(&mut txn, 0, 2);
+            array.remove_range(&mut txn, 0, 2).unwrap();
             // txn is committed at the end of this scope
         }
         assert!(
@@ -940,8 +940,8 @@ mod test {
 
         {
             let mut txn = d1.transact_mut();
-            array.push_back(&mut txn, 4);
-            array.push_back(&mut txn, "dtrn");
+            array.push_back(&mut txn, 4).unwrap();
+            array.push_back(&mut txn, "dtrn").unwrap();
             // txn is committed at the end of this scope
         }
         assert_eq!(
@@ -959,7 +959,7 @@ mod test {
 
         {
             let mut txn = d1.transact_mut();
-            array.remove_range(&mut txn, 0, 1);
+            array.remove_range(&mut txn, 0, 1).unwrap();
         }
         assert_eq!(added.borrow_mut().take(), Some(HashSet::new()));
         assert_eq!(
@@ -970,7 +970,7 @@ mod test {
 
         {
             let mut txn = d1.transact_mut();
-            array.insert(&mut txn, 1, 0.5);
+            array.insert(&mut txn, 1, 0.5).unwrap();
         }
         assert_eq!(
             added.borrow_mut().take(),
@@ -1038,7 +1038,7 @@ mod test {
 
         {
             let mut t1 = d1.transact_mut();
-            a1.insert_range(&mut t1, 0, [1, 2]);
+            a1.insert_range(&mut t1, 0, [1, 2]).unwrap();
         }
         exchange_updates(&[&d1, &d2]);
 
@@ -1078,7 +1078,7 @@ mod test {
                     } as usize;
                     expected.insert(insert_pos, moved);
 
-                    yarray.move_to(&mut txn, pos, new_pos);
+                    yarray.move_to(&mut txn, pos, new_pos).unwrap();
 
                     let actual = yarray.to_json(&txn);
                     assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
@@ -1099,7 +1099,9 @@ mod test {
             let mut pos = rng.between(0, yarray.len(&txn)) as usize;
             if let Any::Array(expected) = yarray.to_json(&txn) {
                 let mut expected = Vec::from(expected);
-                yarray.insert_range(&mut txn, pos as u32, content.clone());
+                yarray
+                    .insert_range(&mut txn, pos as u32, content.clone())
+                    .unwrap();
 
                 for any in content {
                     expected.insert(pos, any);
@@ -1116,7 +1118,9 @@ mod test {
             let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
-            let array2 = yarray.insert(&mut txn, pos, ArrayPrelim::from([1, 2, 3, 4]));
+            let array2 = yarray
+                .insert(&mut txn, pos, ArrayPrelim::from([1, 2, 3, 4]))
+                .unwrap();
             let expected: Box<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
             assert_eq!(array2.to_json(&txn), Any::Array(expected));
         }
@@ -1125,10 +1129,12 @@ mod test {
             let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
-            let map = yarray.insert(&mut txn, pos, MapPrelim::<i32>::from(HashMap::default()));
-            map.insert(&mut txn, "someprop".to_string(), 42);
-            map.insert(&mut txn, "someprop".to_string(), 43);
-            map.insert(&mut txn, "someprop".to_string(), 44);
+            let map = yarray
+                .insert(&mut txn, pos, MapPrelim::<i32>::from(HashMap::default()))
+                .unwrap();
+            map.insert(&mut txn, "someprop".to_string(), 42).unwrap();
+            map.insert(&mut txn, "someprop".to_string(), 43).unwrap();
+            map.insert(&mut txn, "someprop".to_string(), 44).unwrap();
         }
 
         fn delete(doc: &mut Doc, rng: &mut StdRng) {
@@ -1142,12 +1148,12 @@ mod test {
                     if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
                         let pos = rng.between(0, array2.len(&txn) - 1);
                         let del_len = rng.between(0, 2.min(array2.len(&txn) - pos));
-                        array2.remove_range(&mut txn, pos, del_len);
+                        array2.remove_range(&mut txn, pos, del_len).unwrap();
                     }
                 } else {
                     if let Any::Array(old_content) = yarray.to_json(&txn) {
                         let mut old_content = Vec::from(old_content);
-                        yarray.remove_range(&mut txn, pos, del_len);
+                        yarray.remove_range(&mut txn, pos, del_len).unwrap();
                         old_content.drain(pos as usize..(pos + del_len) as usize);
                         assert_eq!(
                             yarray.to_json(&txn),
@@ -1189,8 +1195,8 @@ mod test {
         let a1 = d1.get_or_insert_array("array");
         let mut t1 = d1.transact_mut();
 
-        a1.insert_range(&mut t1, 0, ["A"]);
-        a1.remove(&mut t1, 0);
+        a1.insert_range(&mut t1, 0, ["A"]).unwrap();
+        a1.remove(&mut t1, 0).unwrap();
 
         let actual = a1.get(&t1, 0);
         assert_eq!(actual, None);
@@ -1209,13 +1215,15 @@ mod test {
             paths_copy.borrow_mut().push(path);
         });
 
-        array.insert(&mut doc.transact_mut(), 0, MapPrelim::<String>::new());
+        array
+            .insert(&mut doc.transact_mut(), 0, MapPrelim::<String>::new())
+            .unwrap();
 
         {
             let mut txn = doc.transact_mut();
             let map = array.get(&txn, 0).unwrap().to_ymap().unwrap();
-            map.insert(&mut txn, "a", "a");
-            array.insert(&mut txn, 0, 0);
+            map.insert(&mut txn, "a", "a").unwrap();
+            array.insert(&mut txn, 0, 0).unwrap();
         }
 
         let expected = &[
@@ -1250,8 +1258,8 @@ mod test {
 
         {
             let mut txn = d1.transact_mut();
-            a1.insert_range(&mut txn, 0, [1, 2, 3]);
-            a1.move_to(&mut txn, 1, 0);
+            a1.insert_range(&mut txn, 0, [1, 2, 3]).unwrap();
+            a1.move_to(&mut txn, 1, 0).unwrap();
         }
         assert_eq!(a1.to_json(&d1.transact()), vec![2, 1, 3].into());
 
@@ -1264,7 +1272,7 @@ mod test {
             &vec![Change::Added(vec![2.into(), 1.into(), 3.into()])]
         );
 
-        a1.move_to(&mut d1.transact_mut(), 0, 2);
+        a1.move_to(&mut d1.transact_mut(), 0, 2).unwrap();
 
         assert_eq!(a1.to_json(&d1.transact()), vec![1, 2, 3].into());
         let actual = e1.as_ref().borrow();
@@ -1300,8 +1308,8 @@ mod test {
             *x = e.delta(txn).to_vec();
         });
 
-        a1.insert_range(&mut d1.transact_mut(), 0, [1, 2]);
-        a1.move_to(&mut d1.transact_mut(), 1, 0);
+        a1.insert_range(&mut d1.transact_mut(), 0, [1, 2]).unwrap();
+        a1.move_to(&mut d1.transact_mut(), 1, 0).unwrap();
         assert_eq!(a1.to_json(&d1.transact()), vec![2, 1].into());
         {
             let actual = e1.as_ref().borrow();
@@ -1326,7 +1334,7 @@ mod test {
             );
         }
 
-        a1.move_to(&mut d1.transact_mut(), 0, 2);
+        a1.move_to(&mut d1.transact_mut(), 0, 2).unwrap();
         assert_eq!(a1.to_json(&d1.transact()), vec![1, 2].into());
         {
             let actual = e1.as_ref().borrow();
@@ -1349,13 +1357,16 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let a2 = d2.get_or_insert_array("array");
 
-        a1.insert_range(&mut d1.transact_mut(), 0, [1, 2, 3, 4]);
+        a1.insert_range(&mut d1.transact_mut(), 0, [1, 2, 3, 4])
+            .unwrap();
         exchange_updates(&[&d1, &d2]);
 
-        a1.move_range_to(&mut d1.transact_mut(), 0, Assoc::After, 1, Assoc::Before, 3);
+        a1.move_range_to(&mut d1.transact_mut(), 0, Assoc::After, 1, Assoc::Before, 3)
+            .unwrap();
         assert_eq!(a1.to_json(&d1.transact()), vec![3, 1, 2, 4].into());
 
-        a2.move_range_to(&mut d2.transact_mut(), 2, Assoc::After, 3, Assoc::Before, 1);
+        a2.move_range_to(&mut d2.transact_mut(), 2, Assoc::After, 3, Assoc::Before, 1)
+            .unwrap();
         assert_eq!(a2.to_json(&d2.transact()), vec![1, 3, 4, 2].into());
 
         exchange_updates(&[&d1, &d2]);
@@ -1374,10 +1385,10 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let arr_len = arr.len(&txn);
-            arr.remove_range(&mut txn, 0, arr_len);
+            arr.remove_range(&mut txn, 0, arr_len).unwrap();
             let arr_len = arr.len(&txn);
             assert_eq!(arr_len, 0);
-            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3]);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3]).unwrap();
         }
         arr.move_range_to(
             &mut doc.transact_mut(),
@@ -1386,17 +1397,19 @@ mod test {
             2,
             Assoc::Before,
             4,
-        );
+        )
+        .unwrap();
         assert_eq!(arr.to_json(&doc.transact()), vec![0, 3, 1, 2].into());
 
         // Move 0-0 to 10
         {
             let mut txn = doc.transact_mut();
             let arr_len = arr.len(&txn);
-            arr.remove_range(&mut txn, 0, arr_len);
+            arr.remove_range(&mut txn, 0, arr_len).unwrap();
             let arr_len = arr.len(&txn);
             assert_eq!(arr_len, 0);
-            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+                .unwrap();
         }
         arr.move_range_to(
             &mut doc.transact_mut(),
@@ -1405,7 +1418,8 @@ mod test {
             0,
             Assoc::Before,
             10,
-        );
+        )
+        .unwrap();
         assert_eq!(
             arr.to_json(&doc.transact()),
             vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0].into()
@@ -1415,10 +1429,11 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let arr_len = arr.len(&txn);
-            arr.remove_range(&mut txn, 0, arr_len);
+            arr.remove_range(&mut txn, 0, arr_len).unwrap();
             let arr_len = arr.len(&txn);
             assert_eq!(arr_len, 0);
-            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+                .unwrap();
         }
         arr.move_range_to(
             &mut doc.transact_mut(),
@@ -1427,7 +1442,8 @@ mod test {
             1,
             Assoc::Before,
             10,
-        );
+        )
+        .unwrap();
         assert_eq!(
             arr.to_json(&doc.transact()),
             vec![2, 3, 4, 5, 6, 7, 8, 9, 0, 1].into()
@@ -1437,10 +1453,11 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let arr_len = arr.len(&txn);
-            arr.remove_range(&mut txn, 0, arr_len);
+            arr.remove_range(&mut txn, 0, arr_len).unwrap();
             let arr_len = arr.len(&txn);
             assert_eq!(arr_len, 0);
-            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+                .unwrap();
         }
         arr.move_range_to(
             &mut doc.transact_mut(),
@@ -1449,7 +1466,8 @@ mod test {
             5,
             Assoc::Before,
             7,
-        );
+        )
+        .unwrap();
         assert_eq!(
             arr.to_json(&doc.transact()),
             vec![0, 1, 2, 6, 3, 4, 5, 7, 8, 9].into()
@@ -1459,10 +1477,11 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let arr_len = arr.len(&txn);
-            arr.remove_range(&mut txn, 0, arr_len);
+            arr.remove_range(&mut txn, 0, arr_len).unwrap();
             let arr_len = arr.len(&txn);
             assert_eq!(arr_len, 0);
-            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+                .unwrap();
         }
         arr.move_range_to(
             &mut doc.transact_mut(),
@@ -1471,7 +1490,8 @@ mod test {
             0,
             Assoc::Before,
             10,
-        );
+        )
+        .unwrap();
         assert_eq!(
             arr.to_json(&doc.transact()),
             vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].into()
@@ -1481,10 +1501,11 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let arr_len = arr.len(&txn);
-            arr.remove_range(&mut txn, 0, arr_len);
+            arr.remove_range(&mut txn, 0, arr_len).unwrap();
             let arr_len = arr.len(&txn);
             assert_eq!(arr_len, 0);
-            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+                .unwrap();
         }
         arr.move_range_to(
             &mut doc.transact_mut(),
@@ -1493,7 +1514,8 @@ mod test {
             5,
             Assoc::Before,
             5,
-        );
+        )
+        .unwrap();
         assert_eq!(
             arr.to_json(&doc.transact()),
             vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].into()
@@ -1503,10 +1525,11 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let arr_len = arr.len(&txn);
-            arr.remove_range(&mut txn, 0, arr_len);
+            arr.remove_range(&mut txn, 0, arr_len).unwrap();
             let arr_len = arr.len(&txn);
             assert_eq!(arr_len, 0);
-            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+                .unwrap();
         }
         arr.move_range_to(
             &mut doc.transact_mut(),
@@ -1515,7 +1538,8 @@ mod test {
             9,
             Assoc::Before,
             0,
-        );
+        )
+        .unwrap();
         assert_eq!(
             arr.to_json(&doc.transact()),
             vec![9, 0, 1, 2, 3, 4, 5, 6, 7, 8].into()
@@ -1525,10 +1549,11 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let arr_len = arr.len(&txn);
-            arr.remove_range(&mut txn, 0, arr_len);
+            arr.remove_range(&mut txn, 0, arr_len).unwrap();
             let arr_len = arr.len(&txn);
             assert_eq!(arr_len, 0);
-            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+                .unwrap();
         }
         arr.move_range_to(
             &mut doc.transact_mut(),
@@ -1537,7 +1562,8 @@ mod test {
             9,
             Assoc::Before,
             0,
-        );
+        )
+        .unwrap();
         assert_eq!(
             arr.to_json(&doc.transact()),
             vec![8, 9, 0, 1, 2, 3, 4, 5, 6, 7].into()
@@ -1547,10 +1573,11 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let arr_len = arr.len(&txn);
-            arr.remove_range(&mut txn, 0, arr_len);
+            arr.remove_range(&mut txn, 0, arr_len).unwrap();
             let arr_len = arr.len(&txn);
             assert_eq!(arr_len, 0);
-            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+                .unwrap();
         }
         arr.move_range_to(
             &mut doc.transact_mut(),
@@ -1559,7 +1586,8 @@ mod test {
             6,
             Assoc::Before,
             3,
-        );
+        )
+        .unwrap();
         assert_eq!(
             arr.to_json(&doc.transact()),
             vec![0, 1, 2, 4, 5, 6, 3, 7, 8, 9].into()
@@ -1569,10 +1597,11 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let arr_len = arr.len(&txn);
-            arr.remove_range(&mut txn, 0, arr_len);
+            arr.remove_range(&mut txn, 0, arr_len).unwrap();
             let arr_len = arr.len(&txn);
             assert_eq!(arr_len, 0);
-            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+                .unwrap();
         }
         arr.move_range_to(
             &mut doc.transact_mut(),
@@ -1581,7 +1610,8 @@ mod test {
             5,
             Assoc::Before,
             3,
-        );
+        )
+        .unwrap();
         assert_eq!(
             arr.to_json(&doc.transact()),
             vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].into()
@@ -1605,7 +1635,7 @@ mod test {
                 let doc = d2.write().unwrap();
                 let array = doc.get_or_insert_array("test");
                 let mut txn = doc.transact_mut();
-                array.push_back(&mut txn, "a");
+                array.push_back(&mut txn, "a").unwrap();
             }
         });
 
@@ -1618,7 +1648,7 @@ mod test {
                 let doc = d3.write().unwrap();
                 let array = doc.get_or_insert_array("test");
                 let mut txn = doc.transact_mut();
-                array.push_back(&mut txn, "b");
+                array.push_back(&mut txn, "b").unwrap();
             }
         });
 
@@ -1638,11 +1668,11 @@ mod test {
         let doc = Doc::with_client_id(1);
         let array = doc.get_or_insert_array("array");
         let mut txn = array.transact_mut();
-        array.insert_range(&mut txn, 0, [1, 2, 3]);
+        array.insert_range(&mut txn, 0, [1, 2, 3]).unwrap();
         drop(txn);
 
         let mut txn = array.transact_mut();
-        array.move_to(&mut txn, 2, 0);
+        array.move_to(&mut txn, 2, 0).unwrap();
 
         let mut iter = array.iter(&txn);
         let v = iter.next();

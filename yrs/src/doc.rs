@@ -973,9 +973,9 @@ mod test {
         let doc = Doc::with_client_id(1490905955);
         let txt = doc.get_or_insert_text("type");
         let mut t = doc.transact_mut();
-        txt.insert(&mut t, 0, "0");
-        txt.insert(&mut t, 0, "1");
-        txt.insert(&mut t, 0, "2");
+        txt.insert(&mut t, 0, "0").unwrap();
+        txt.insert(&mut t, 0, "1").unwrap();
+        txt.insert(&mut t, 0, "2").unwrap();
 
         let encoded = t
             .encode_state_as_update_v1(&StateVector::default())
@@ -995,9 +995,9 @@ mod test {
         let mut t1 = d1.transact_mut();
         // Question: why YText.insert uses positions of blocks instead of actual cursor positions
         // in text as seen by user?
-        txt.insert(&mut t1, 0, "hello");
-        txt.insert(&mut t1, 5, " ");
-        txt.insert(&mut t1, 6, "world");
+        txt.insert(&mut t1, 0, "hello").unwrap();
+        txt.insert(&mut t1, 5, " ").unwrap();
+        txt.insert(&mut t1, 6, "world").unwrap();
 
         assert_eq!(txt.get_string(&t1), "hello world".to_string());
 
@@ -1042,7 +1042,7 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
         {
-            txt.insert(&mut txn, 0, "abc");
+            txt.insert(&mut txn, 0, "abc").unwrap();
             let mut txn2 = doc2.transact_mut();
             let sv = txn2.state_vector().encode_v1().unwrap();
             let u = txn
@@ -1055,7 +1055,7 @@ mod test {
         drop(sub);
 
         {
-            txt.insert(&mut txn, 3, "de");
+            txt.insert(&mut txn, 3, "de").unwrap();
             let mut txn2 = doc2.transact_mut();
             let sv = txn2.state_vector().encode_v1().unwrap();
             let u = txn
@@ -1123,7 +1123,7 @@ mod test {
     fn ypy_issue_32() {
         let d1 = Doc::with_client_id(1971027812);
         let source_1 = d1.get_or_insert_text("source");
-        source_1.push(&mut d1.transact_mut(), "a");
+        source_1.push(&mut d1.transact_mut(), "a").unwrap();
 
         let updates = [
             vec![
@@ -1211,7 +1211,7 @@ mod test {
             let mut txn = doc.transact_mut();
 
             // Update the document
-            text.insert(&mut txn, 0, "abc");
+            text.insert(&mut txn, 0, "abc").unwrap();
             text.remove_range(&mut txn, 1, 2);
             txn.commit();
 
@@ -1224,7 +1224,7 @@ mod test {
         // Ensure that the subscription is successfully dropped.
         doc.unobserve_transaction_cleanup(sub);
         let mut txn = doc.transact_mut();
-        text.insert(&mut txn, 0, "should not update");
+        text.insert(&mut txn, 0, "should not update").unwrap();
         txn.commit();
         assert_ne!(after_state.take(), txn.after_state);
     }
@@ -1233,7 +1233,7 @@ mod test {
     fn partially_duplicated_update() {
         let d1 = Doc::with_client_id(1);
         let txt1 = d1.get_or_insert_text("text");
-        txt1.insert(&mut d1.transact_mut(), 0, "hello");
+        txt1.insert(&mut d1.transact_mut(), 0, "hello").unwrap();
         let u = d1
             .transact()
             .encode_state_as_update_v1(&StateVector::default())
@@ -1244,7 +1244,7 @@ mod test {
         d2.transact_mut()
             .apply_update(Update::decode_v1(&u).unwrap());
 
-        txt1.insert(&mut d1.transact_mut(), 5, "world");
+        txt1.insert(&mut d1.transact_mut(), 5, "world").unwrap();
         let u = d1
             .transact()
             .encode_state_as_update_v1(&StateVector::default())
@@ -1289,7 +1289,7 @@ mod test {
 
         for c in INPUT.chars() {
             // append characters 1-by-1 (1 transactions per character)
-            txt1.push(&mut d1.transact_mut(), &c.to_string());
+            txt1.push(&mut d1.transact_mut(), &c.to_string()).unwrap();
         }
 
         assert_eq!(acc.take(), INPUT);
@@ -1363,9 +1363,9 @@ mod test {
 
         let d1 = Doc::with_options(options);
         let txt1 = d1.get_or_insert_text("text");
-        txt1.insert(&mut d1.transact_mut(), 0, "hello");
+        txt1.insert(&mut d1.transact_mut(), 0, "hello").unwrap();
         let snapshot = d1.transact_mut().snapshot();
-        txt1.insert(&mut d1.transact_mut(), 5, " world");
+        txt1.insert(&mut d1.transact_mut(), 5, " world").unwrap();
 
         let mut encoder = EncoderV1::new();
         d1.transact_mut()
@@ -1618,7 +1618,7 @@ mod test {
         {
             let root = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
-            root.push_back(&mut txn, ArrayPrelim::from(["A"]));
+            root.push_back(&mut txn, ArrayPrelim::from(["A"])).unwrap();
         }
 
         exchange_updates(&[&d1, &d2, &d3]);
@@ -1626,7 +1626,7 @@ mod test {
         {
             let root = d2.get_or_insert_array("array");
             let mut t2 = d2.transact_mut();
-            root.remove(&mut t2, 0);
+            root.remove(&mut t2, 0).unwrap();
             d1.transact_mut()
                 .apply_update(Update::decode_v1(&t2.encode_update_v1().unwrap()).unwrap());
         }
@@ -1635,7 +1635,7 @@ mod test {
             let root = d3.get_or_insert_array("array");
             let mut t3 = d3.transact_mut();
             let a3 = root.get(&t3, 0).unwrap().to_yarray().unwrap();
-            a3.push_back(&mut t3, "B");
+            a3.push_back(&mut t3, "B").unwrap();
             // D1 got update which already removed a3, but this must not cause panic
             d1.transact_mut()
                 .apply_update(Update::decode_v1(&t3.encode_update_v1().unwrap()).unwrap());
@@ -1672,7 +1672,7 @@ mod test {
         });
         {
             let mut txn = doc.transact_mut();
-            let doc_a_ref = subdocs.insert(&mut txn, "a", doc_a);
+            let doc_a_ref = subdocs.insert(&mut txn, "a", doc_a).unwrap();
             doc_a_ref.load(&mut txn);
         }
 
@@ -1715,7 +1715,7 @@ mod test {
             o.should_load = false;
             o
         });
-        subdocs.insert(&mut doc.transact_mut(), "b", doc_b);
+        subdocs.insert(&mut doc.transact_mut(), "b", doc_b).unwrap();
         let actual = event.take();
         assert_eq!(actual, Some((vec![uuid_a.clone()], vec![], vec![])));
 
@@ -1735,7 +1735,7 @@ mod test {
         });
         {
             let mut txn = doc.transact_mut();
-            let doc_c_ref = subdocs.insert(&mut txn, "c", doc_c);
+            let doc_c_ref = subdocs.insert(&mut txn, "c", doc_c).unwrap();
             doc_c_ref.load(&mut txn);
         }
         let actual = event.take();
@@ -1816,7 +1816,7 @@ mod test {
         });
         let mut doc_ref = {
             let mut txn = doc.transact_mut();
-            let doc_ref = array.insert(&mut txn, 0, subdoc_1);
+            let doc_ref = array.insert(&mut txn, 0, subdoc_1).unwrap();
             let o = doc_ref.options();
             assert!(o.should_load);
             assert!(!o.auto_load);
@@ -1900,7 +1900,7 @@ mod test {
 
         let mut subdoc_1 = {
             let mut txn = doc.transact_mut();
-            array.insert(&mut txn, 0, subdoc_1)
+            array.insert(&mut txn, 0, subdoc_1).unwrap()
         };
         assert!(subdoc_1.options().should_load);
         assert!(subdoc_1.options().auto_load);
@@ -1971,19 +1971,23 @@ mod test {
 
         let mut txn = doc.transact_mut();
 
-        text.push(&mut txn, "hello");
-        xml_text.push(&mut txn, "world");
-        xml_fragment.insert(&mut txn, 0, XmlElementPrelim::empty("div"));
-        xml_element.insert(&mut txn, 0, XmlElementPrelim::empty("body"));
-        array.insert_range(&mut txn, 0, [1, 2, 3]);
-        map.insert(&mut txn, "key1", "value1");
+        text.push(&mut txn, "hello").unwrap();
+        xml_text.push(&mut txn, "world").unwrap();
+        xml_fragment
+            .insert(&mut txn, 0, XmlElementPrelim::empty("div"))
+            .unwrap();
+        xml_element
+            .insert(&mut txn, 0, XmlElementPrelim::empty("body"))
+            .unwrap();
+        array.insert_range(&mut txn, 0, [1, 2, 3]).unwrap();
+        map.insert(&mut txn, "key1", "value1").unwrap();
 
         // sub documents cannot use their parent's transaction
         let sub_doc = Doc::new();
         let sub_text = sub_doc.get_or_insert_text("sub-text");
-        let sub_doc = map.insert(&mut txn, "sub-doc", sub_doc);
+        let sub_doc = map.insert(&mut txn, "sub-doc", sub_doc).unwrap();
         let mut sub_txn = sub_doc.transact_mut();
-        sub_text.push(&mut sub_txn, "sample");
+        sub_text.push(&mut sub_txn, "sample").unwrap();
 
         let actual = doc.to_json(&txn);
         let expected = any!({

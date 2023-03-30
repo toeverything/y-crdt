@@ -385,19 +385,28 @@ fn negative_zero_decoding_v2() {
     let root = doc.get_or_insert_map("root");
     let mut txn = doc.transact_mut();
 
-    root.insert(&mut txn, "sequence", MapPrelim::<bool>::new()); //NOTE: This is how I put nested map.
+    root.insert(&mut txn, "sequence", MapPrelim::<bool>::new())
+        .unwrap(); //NOTE: This is how I put nested map.
     let sequence = root.get(&txn, "sequence").unwrap().to_ymap().unwrap();
-    sequence.insert(&mut txn, "id", "V9Uk9pxUKZIrW6cOkC0Rg".to_string());
-    sequence.insert(&mut txn, "cuts", ArrayPrelim::<_, Any>::from([]));
-    sequence.insert(&mut txn, "name", "new sequence".to_string());
+    sequence
+        .insert(&mut txn, "id", "V9Uk9pxUKZIrW6cOkC0Rg".to_string())
+        .unwrap();
+    sequence
+        .insert(&mut txn, "cuts", ArrayPrelim::<_, Any>::from([]))
+        .unwrap();
+    sequence
+        .insert(&mut txn, "name", "new sequence".to_string())
+        .unwrap();
 
-    root.insert(&mut txn, "__version__", 1);
+    root.insert(&mut txn, "__version__", 1).unwrap();
     root.insert(
         &mut txn,
         "face_expressions",
         ArrayPrelim::<_, Any>::from([]),
-    );
-    root.insert(&mut txn, "characters", ArrayPrelim::<_, Any>::from([]));
+    )
+    .unwrap();
+    root.insert(&mut txn, "characters", ArrayPrelim::<_, Any>::from([]))
+        .unwrap();
     let expected = root.to_json(&txn);
 
     let buffer = txn
