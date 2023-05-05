@@ -459,8 +459,8 @@ pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
 pub use crate::doc::Transact;
 pub use crate::doc::{
-    DestroySubscription, SubdocsSubscription, TransactionCleanupSubscription, UpdateSubscription,
-    AfterTransactionSubscription,
+    AfterTransactionSubscription, DestroySubscription, SubdocsSubscription,
+    TransactionCleanupSubscription, UpdateSubscription,
 };
 pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;
@@ -500,6 +500,7 @@ pub use crate::types::GetString;
 pub use crate::types::Observable;
 pub use crate::undo::UndoManager;
 pub use crate::update::Update;
+pub use crate::utils::client_hasher::ClientHasher;
 use rand::RngCore;
 
 pub type Uuid = std::sync::Arc<str>;
